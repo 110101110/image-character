@@ -1,0 +1,13 @@
+to do list:
+	- randomize mapping characters, adjustable by slidebar, to change the numbers of characters replaced
+	-	remplace certains characters by random character from a string, i.e. "BRUNQUELL"
+			also adjustable by slidebar
+	-	wider range of density (0 - 15), with a bigger characters set
+	-	slidebar for font size
+	-	more options for monospace fonts
+	-	text mode toggle for text box
+	-	toggle/menu for fg & bg colors
+	-	organize all slidebars and toggles
+	-	possible to save img as PNG (with choices of transparent bg or black bg) or text file (.txt)
+	-	sizing (?)
+	-	more printable ascii characters
