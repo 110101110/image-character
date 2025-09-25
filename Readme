@@ -1,6 +1,7 @@
+Image to character
 to do list:
 	- randomize mapping characters, adjustable by slidebar, to change the numbers of characters replaced
-	-	remplace certains characters by random character from a string, i.e. "BRUNQUELL"
+	-	remplace certains characters by random character from a string
 			also adjustable by slidebar
 	-	wider range of density (0 - 15), with a bigger characters set
 	-	slidebar for font size
@@ -10,4 +11,21 @@ to do list:
 	-	organize all slidebars and toggles
 	-	possible to save img as PNG (with choices of transparent bg or black bg) or text file (.txt)
 	-	sizing (?)
-	-	more printable ascii characters
+	-	bigger mapping character set with unicode
+
+reference:
+	- http://aa.en.utf8art.com/node/8343
+
+character set:
+density_c = (
+    " .:-=+*#%@"          # ASCII base
+    "✧✦✩✪✫✬✭✮✯✰"        # Stars (light / airy)
+    "✿❀❁❂❃❉❊❋"          # Flowers (slightly denser)
+    "アカサタナハマヤラワ"  # Katakana (light-medium density)
+    "𝄀𝄁𝄂𝄃𝄆𝄇𝄈𝄉𝄊𝄋"    # Bar lines & repeats (thin musical symbols)
+    "𝄞𝄢𝄡𝄫𝄪𝄭𝄮𝄯𝄰𝄱"    # Clefs & accidentals (medium density)
+    "𝄻𝄼𝄽𝄾𝅀𝅁𝅂𝅃𝅄𝅅"    # Rests (mid-dark)
+    "𝅘𝅙𝅚𝅛𝅜𝅝𝅗𝅥𝅘𝅥𝅘𝅥𝅮𝅘𝅥𝅯"    # Notes (dense)
+    "⠁⠂⠄⡀⢀⠐⠠⡁⡂⡄⡈⡐⡠"  # Braille (fine-grain shading)
+    "█▓▒░"                # Full/half blocks (darkest)
+)

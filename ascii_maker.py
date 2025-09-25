@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import tkinter as tk
 from tkinter import filedialog
 from PIL import Image, ImageTk, ImageFilter
@@ -21,8 +22,19 @@ def img_to_ascii(img, width=80, threshold=128, mode="basic", density=5):
 	bw_pixels = list(img_bw.getdata())
 
 	# density and thickness character sets
-	density_c = "@%#$*+=-:. "[::-1][:max(2, density)]
-	edge_c = ["/", "|", "-", "\\"]
+	density_c = (
+    " .:-=+*#%@"          # ASCII base
+    "✰"        # Stars (light / airy)
+    "❋"
+    "𝄞𝄱"
+    "⠁⠂⠄⡀⢀⠐⠠⡁⡂⡄⡈⡐⡠"  # Braille (fine-grain shading)
+    "█▓▒░"                # Full/half blocks (darkest)
+)
+
+	density_c = density_c[::-1][:max(2, density)]
+	edge_c = [
+    "─", "│", "┌", "┐", "└", "┘", "├", "┤", "┬", "┴", "┼",
+    "/", "|", "-", "\\"]
 
 	# mapping (basic and invert)
 	chars = []
@@ -100,7 +112,7 @@ threshold_slider.set=(128)
 threshold_slider.pack(side=tk.LEFT)
 
 #density slide bar
-density_slider = tk.Scale(control_frame, from_=2, to=10, orient="horizontal", label="Density")
+density_slider = tk.Scale(control_frame, from_=2, to=100, orient="horizontal", label="Density")
 density_slider.set=(5)
 density_slider.pack(side=tk.LEFT)
 
