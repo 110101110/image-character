@@ -1,0 +1,31 @@
+# macOS
+.DS_Store
+# Build artifacts
+*.o
+*.obj
+*.lo
+*.la
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+*.elf
+ascii_studio
+
+# Dependency files
+*.d
+
+# IDE / editor files
+*.swp
+*~
+*.tmp
+*.log
+*.bak
+.vscode/
+.idea/
+*.iml
+
+# Generated app config
+imgui.ini

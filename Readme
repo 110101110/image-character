@@ -13,9 +13,6 @@ to do list:
 	-	sizing (?)
 	-	bigger mapping character set with unicode
 
-reference:
-	- http://aa.en.utf8art.com/node/8343
-
 character set:
 density_c = (
     " .:-=+*#%@"          # ASCII base
