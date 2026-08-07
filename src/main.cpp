@@ -13,6 +13,7 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#include "imgui_internal.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -115,119 +116,157 @@ GLuint create_texture_from_pixels(const unsigned char *pixels, int w, int h, int
 }
 
 //function to export ascii layer to image file
-void export_ascii_fbo_gpu(const std::string &filepath, const AsciiOutput &ascii,
-						  float spacing_x, float spacing_y,
-						  ImVec4 bg_col, ImVec4 text_col, float glitch_intensity,
-						  bool export_full_canvas, ImVec2 viewport_size)
+void export_ascii_to_file(const std::string &filepath,
+									const AsciiOutput &ascii,
+									float spacing_x, float spacing_y,
+									ImVec4 bg_col, ImVec4 text_col,
+									float glitch_intensity,
+									bool export_full_canvas,
+									ImVec2 viewport_size,
+									float export_scale = 2.0f)
 {
 	if (filepath.empty() || ascii.text.empty() || ascii.cols <= 0 || ascii.rows <= 0)
 		return;
 
-	// 1. Calculate Off-Screen Canvas Dimensions
-	int export_w = export_full_canvas ? static_cast<int>(ascii.cols * spacing_x)
-									  : static_cast<int>(viewport_size.x);
-	int export_h = export_full_canvas ? static_cast<int>(ascii.rows * spacing_y)
-									  : static_cast<int>(viewport_size.y);
+	// 1. Calculate Base and Scaled Export Canvas Dimensions
+	float base_w = export_full_canvas ? (ascii.cols * spacing_x) : viewport_size.x;
+	float base_h = export_full_canvas ? (ascii.rows * spacing_y) : viewport_size.y;
 
-	if (export_w <= 0 || export_h <= 0)
+	if (base_w <= 0.0f || base_h <= 0.0f)
 		return;
 
-	// Save previous active OpenGL viewport and framebuffer state
-	GLint prev_fbo = 0;
-	GLint prev_viewport[4];
-	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
-	glGetIntegerv(GL_VIEWPORT, prev_viewport);
+	int export_w = static_cast<int>(base_w * export_scale);
+	int export_h = static_cast<int>(base_h * export_scale);
 
-	// 2. Create Off-Screen Framebuffer and Color Texture Target
-	GLuint fbo, tex;
-	glGenFramebuffers(1, &fbo);
-	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+	float scaled_spacing_x = spacing_x * export_scale;
+	float scaled_spacing_y = spacing_y * export_scale;
+	float scaled_glitch = glitch_intensity * export_scale;
 
-	glGenTextures(1, &tex);
-	glBindTexture(GL_TEXTURE_2D, tex);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, export_w, export_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+	// 2. Allocate Image Buffer & Fill with Canvas Background Color
+	std::vector<unsigned char> image_data(export_w * export_h * 4);
 
-	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+	unsigned char bg_r = static_cast<unsigned char>(std::clamp(bg_col.x * 255.0f, 0.0f, 255.0f));
+	unsigned char bg_g = static_cast<unsigned char>(std::clamp(bg_col.y * 255.0f, 0.0f, 255.0f));
+	unsigned char bg_b = static_cast<unsigned char>(std::clamp(bg_col.z * 255.0f, 0.0f, 255.0f));
+	unsigned char bg_a = static_cast<unsigned char>(std::clamp(bg_col.w * 255.0f, 0.0f, 255.0f));
+
+	for (int i = 0; i < export_w * export_h; ++i)
 	{
-		glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
-		glDeleteTextures(1, &tex);
-		glDeleteFramebuffers(1, &fbo);
-		return;
+		image_data[i * 4 + 0] = bg_r;
+		image_data[i * 4 + 1] = bg_g;
+		image_data[i * 4 + 2] = bg_b;
+		image_data[i * 4 + 3] = bg_a;
 	}
 
-	// 3. Clear Off-Screen Framebuffer with Canvas Background Color
-	glViewport(0, 0, export_w, export_h);
-	glClearColor(bg_col.x, bg_col.y, bg_col.z, bg_col.w);
-	glClear(GL_COLOR_BUFFER_BIT);
+	// 3. Obtain Font Atlas & Active ImFont
+	ImGuiIO &io = ImGui::GetIO();
+	unsigned char *font_pixels = nullptr;
+	int font_tex_w = 0, font_tex_h = 0;
 
-	// 4. Render ASCII Layer directly using ImGui DrawList into the Off-Screen Context
-	ImGui::NewFrame();
-	ImDrawList *draw_list = ImGui::GetForegroundDrawList();
-	ImU32 txt_col_u32 = ImGui::ColorConvertFloat4ToU32(text_col);
+	// Fetch RGBA32 Font Atlas for OpenGL3 backend compatibility
+	io.Fonts->GetTexDataAsRGBA32(&font_pixels, &font_tex_w, &font_tex_h);
 	ImFont *font = ImGui::GetFont();
-	float font_size = ImGui::GetFontSize();
 
-	std::mt19937 rng(1337);
-	std::uniform_real_distribution<float> jitter_dist(-glitch_intensity, glitch_intensity);
-
-	int col = 0, row = 0;
-	for (char ch : ascii.text)
+	if (font && font_pixels && font_tex_w > 0 && font_tex_h > 0)
 	{
-		if (ch == '\n')
+		unsigned char txt_r = static_cast<unsigned char>(std::clamp(text_col.x * 255.0f, 0.0f, 255.0f));
+		unsigned char txt_g = static_cast<unsigned char>(std::clamp(text_col.y * 255.0f, 0.0f, 255.0f));
+		unsigned char txt_b = static_cast<unsigned char>(std::clamp(text_col.z * 255.0f, 0.0f, 255.0f));
+
+		std::mt19937 rng(1337);
+		std::uniform_real_distribution<float> jitter_dist(-scaled_glitch, scaled_glitch);
+
+		int col = 0, row = 0;
+
+		const char *text_ptr = ascii.text.c_str();
+		const char *text_end = text_ptr + ascii.text.size();
+
+		// 4. Decode Multi-Byte UTF-8 Characters Sequentially
+		while (text_ptr < text_end)
 		{
-			row++;
-			col = 0;
-			continue;
+			unsigned int codepoint = 0;
+			int bytes_consumed = ImTextCharFromUtf8(&codepoint, text_ptr, text_end);
+
+			if (bytes_consumed <= 0)
+				break;
+			text_ptr += bytes_consumed;
+
+			if (codepoint == '\n')
+			{
+				row++;
+				col = 0;
+				continue;
+			}
+
+			// --- FIX FOR FindGlyph ERROR ---
+			// Route lookup through font->Baked.FindGlyph() defined in imgui_draw.h
+			const ImFontGlyph *glyph = (font && font->LastBaked)
+										   ? font->LastBaked->FindGlyph(static_cast<ImWchar>(codepoint))
+										   : nullptr;
+
+			if (glyph && glyph->Visible)
+			{
+				float offset_x = (scaled_glitch > 0.0f) ? jitter_dist(rng) : 0.0f;
+				float offset_y = (scaled_glitch > 0.0f) ? jitter_dist(rng) : 0.0f;
+
+				float char_base_x = (col * scaled_spacing_x) + offset_x + (glyph->X0 * export_scale);
+				float char_base_y = (row * scaled_spacing_y) + offset_y + (glyph->Y0 * export_scale);
+
+				int src_u0 = static_cast<int>(glyph->U0 * font_tex_w);
+				int src_v0 = static_cast<int>(glyph->V0 * font_tex_h);
+				int src_u1 = static_cast<int>(glyph->U1 * font_tex_w);
+				int src_v1 = static_cast<int>(glyph->V1 * font_tex_h);
+
+				int glyph_tex_w = std::max(1, src_u1 - src_u0);
+				int glyph_tex_h = std::max(1, src_v1 - src_v0);
+
+				int dst_draw_w = static_cast<int>((glyph->X1 - glyph->X0) * export_scale);
+				int dst_draw_h = static_cast<int>((glyph->Y1 - glyph->Y0) * export_scale);
+
+				// Bilinear alpha blending for subpixel accuracy
+				for (int dy = 0; dy < dst_draw_h; ++dy)
+				{
+					for (int dx = 0; dx < dst_draw_w; ++dx)
+					{
+						int dst_x = static_cast<int>(char_base_x) + dx;
+						int dst_y = static_cast<int>(char_base_y) + dy;
+
+						if (dst_x >= 0 && dst_x < export_w && dst_y >= 0 && dst_y < export_h)
+						{
+							int src_x = src_u0 + (dx * glyph_tex_w) / std::max(1, dst_draw_w);
+							int src_y = src_v0 + (dy * glyph_tex_h) / std::max(1, dst_draw_h);
+
+							if (src_x >= 0 && src_x < font_tex_w && src_y >= 0 && src_y < font_tex_h)
+							{
+								int pixel_index = (src_y * font_tex_w + src_x) * 4;
+							unsigned char alpha = font_pixels[pixel_index + 3];
+								if (alpha > 0)
+								{
+									float a = (alpha / 255.0f) * text_col.w;
+									int dst_idx = (dst_y * export_w + dst_x) * 4;
+
+									// Alpha Blend onto background
+									image_data[dst_idx + 0] = static_cast<unsigned char>(image_data[dst_idx + 0] * (1.0f - a) + txt_r * a);
+									image_data[dst_idx + 1] = static_cast<unsigned char>(image_data[dst_idx + 1] * (1.0f - a) + txt_g * a);
+									image_data[dst_idx + 2] = static_cast<unsigned char>(image_data[dst_idx + 2] * (1.0f - a) + txt_b * a);
+								}
+							}
+						}
+					}
+				}
+			}
+			col++;
 		}
-
-		float offset_x = (glitch_intensity > 0.0f) ? jitter_dist(rng) : 0.0f;
-		float offset_y = (glitch_intensity > 0.0f) ? jitter_dist(rng) : 0.0f;
-
-		// Render relative to off-screen origin (0, 0)
-		ImVec2 char_pos(
-			(col * spacing_x) + offset_x,
-			(row * spacing_y) + offset_y);
-
-		char buf[2] = {ch, '\0'};
-		draw_list->AddText(font, font_size, char_pos, txt_col_u32, buf);
-		col++;
 	}
 
-	// Process draw calls for the off-screen frame
-	ImGui::Render();
-	ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-	// 5. Read back pixel memory directly from the GPU Framebuffer
-	std::vector<unsigned char> pixel_buffer(export_w * export_h * 4);
-	glReadPixels(0, 0, export_w, export_h, GL_RGBA, GL_UNSIGNED_BYTE, pixel_buffer.data());
-
-	// Restore previous OpenGL state
-	glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
-	glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
-
-	glDeleteTextures(1, &tex);
-	glDeleteFramebuffers(1, &fbo);
-
-	// 6. Flip Y-axis orientation for image file formats (OpenGL vs Image File Origin)
-	std::vector<unsigned char> flipped_buffer(export_w * export_h * 4);
-	for (int y = 0; y < export_h; ++y)
-	{
-		memcpy(&flipped_buffer[y * export_w * 4],
-			   &pixel_buffer[(export_h - 1 - y) * export_w * 4],
-			   export_w * 4);
-	}
-
-	// 7. Write directly to PNG or JPG via stb_image_write
+	// 5. Write to PNG or JPG File via stb_image_write
 	if (filepath.ends_with(".jpg") || filepath.ends_with(".jpeg"))
 	{
-		stbi_write_jpg(filepath.c_str(), export_w, export_h, 4, flipped_buffer.data(), 90);
+		stbi_write_jpg(filepath.c_str(), export_w, export_h, 4, image_data.data(), 95);
 	}
 	else
 	{
-		stbi_write_png(filepath.c_str(), export_w, export_h, 4, flipped_buffer.data(), export_w * 4);
+		stbi_write_png(filepath.c_str(), export_w, export_h, 4, image_data.data(), export_w * 4);
 	}
 }
 
@@ -260,8 +299,35 @@ int main()
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGuiIO &io = ImGui::GetIO();
-	(void)io;
 	ImGui::StyleColorsLight();
+
+	// 1. Build custom Glyph Ranges array covering ASCII + Box Drawing + Block Elements
+	static const ImWchar custom_glyph_ranges[] = {
+		0x0020,
+		0x00FF, // Basic Latin + Latin Supplement
+		0x2500,
+		0x257F, // Box Drawing (│ ─ ┌ ┐ └ ┘)
+		0x2580,
+		0x259F, // Block Elements (█ ▄ ▀ ▌ ▐)
+		0,
+	};
+	// 2. Load TTF/OTF font with custom Unicode ranges (e.g. Menlo, JetBrains Mono, Fira Code)
+	ImFontConfig font_config;
+	font_config.OversampleH = 2;
+	font_config.OversampleV = 2;
+
+	// Load a macOS native monospace font with box-drawing support
+	ImFont *main_font = io.Fonts->AddFontFromFileTTF(
+		"/System/Library/Fonts/Supplemental/Courier New.ttf",
+		16.0f,
+		&font_config,
+		custom_glyph_ranges);
+
+	if (!main_font)
+	{
+		// Fallback to ImGui default font with extended ranges
+		io.Fonts->AddFontDefault();
+	}
 
 	ImGui_ImplGlfw_InitForOpenGL(window, true);
 	ImGui_ImplOpenGL3_Init("#version 410");
@@ -508,7 +574,7 @@ int main()
 		// Execute deferred image export safely after ImGui render pass completes
 		if (pending_export)
 		{
-			export_ascii_fbo_gpu(
+			export_ascii_to_file(
 				export_file_path,
 				ascii_art,
 				char_spacing_x,

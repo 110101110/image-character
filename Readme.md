@@ -1,17 +1,15 @@
-Image to character
-to do list:
-	- randomize mapping characters, adjustable by slidebar, to change the numbers of characters replaced
-	-	remplace certains characters by random character from a string
-			also adjustable by slidebar
-	-	wider range of density (0 - 15), with a bigger characters set
-	-	slidebar for font size
-	-	more options for monospace fonts
-	-	text mode toggle for text box
-	-	toggle/menu for fg & bg colors
-	-	organize all slidebars and toggles
-	-	possible to save img as PNG (with choices of transparent bg or black bg) or text file (.txt)
-	-	sizing (?)
-	-	bigger mapping character set with unicode
+# Image & character
+
+A custom ascii art generator that fits my need!
+
+*to do list:*
+-	text mode toggle for text box
+-	glith effet: remplace certains characters by random character from an input
+-	unicode UTF8, add more range
+-	slidebar for font and its size
+-	export img as text file
+-   no text when exported as a transparent canvas
+-   unwanted glitch on sliding bars
 
 character set:
 density_c = (
