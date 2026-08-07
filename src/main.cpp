@@ -169,10 +169,6 @@ void export_ascii_to_file(const std::string &filepath,
 
 	if (font && font_pixels && font_tex_w > 0 && font_tex_h > 0)
 	{
-		unsigned char txt_r = static_cast<unsigned char>(std::clamp(text_col.x * 255.0f, 0.0f, 255.0f));
-		unsigned char txt_g = static_cast<unsigned char>(std::clamp(text_col.y * 255.0f, 0.0f, 255.0f));
-		unsigned char txt_b = static_cast<unsigned char>(std::clamp(text_col.z * 255.0f, 0.0f, 255.0f));
-
 		std::mt19937 rng(1337);
 		std::uniform_real_distribution<float> jitter_dist(-scaled_glitch, scaled_glitch);
 
@@ -239,16 +235,31 @@ void export_ascii_to_file(const std::string &filepath,
 							if (src_x >= 0 && src_x < font_tex_w && src_y >= 0 && src_y < font_tex_h)
 							{
 								int pixel_index = (src_y * font_tex_w + src_x) * 4;
-							unsigned char alpha = font_pixels[pixel_index + 3];
+								unsigned char alpha = font_pixels[pixel_index + 3];
 								if (alpha > 0)
 								{
-									float a = (alpha / 255.0f) * text_col.w;
+									float src_a = (alpha / 255.0f) * text_col.w;
 									int dst_idx = (dst_y * export_w + dst_x) * 4;
 
-									// Alpha Blend onto background
-									image_data[dst_idx + 0] = static_cast<unsigned char>(image_data[dst_idx + 0] * (1.0f - a) + txt_r * a);
-									image_data[dst_idx + 1] = static_cast<unsigned char>(image_data[dst_idx + 1] * (1.0f - a) + txt_g * a);
-									image_data[dst_idx + 2] = static_cast<unsigned char>(image_data[dst_idx + 2] * (1.0f - a) + txt_b * a);
+									// Straight-alpha source-over compositing.
+									float dst_a = image_data[dst_idx + 3] / 255.0f;
+									float out_a = src_a + dst_a * (1.0f - src_a);
+
+									if (out_a > 0.0f)
+									{
+										float dst_r = image_data[dst_idx + 0] / 255.0f;
+										float dst_g = image_data[dst_idx + 1] / 255.0f;
+										float dst_b = image_data[dst_idx + 2] / 255.0f;
+
+										float out_r = (text_col.x * src_a + dst_r * dst_a * (1.0f - src_a)) / out_a;
+										float out_g = (text_col.y * src_a + dst_g * dst_a * (1.0f - src_a)) / out_a;
+										float out_b = (text_col.z * src_a + dst_b * dst_a * (1.0f - src_a)) / out_a;
+
+										image_data[dst_idx + 0] = static_cast<unsigned char>(std::clamp(out_r * 255.0f, 0.0f, 255.0f));
+										image_data[dst_idx + 1] = static_cast<unsigned char>(std::clamp(out_g * 255.0f, 0.0f, 255.0f));
+										image_data[dst_idx + 2] = static_cast<unsigned char>(std::clamp(out_b * 255.0f, 0.0f, 255.0f));
+										image_data[dst_idx + 3] = static_cast<unsigned char>(std::clamp(out_a * 255.0f, 0.0f, 255.0f));
+									}
 								}
 							}
 						}
