@@ -1,6 +1,4 @@
-# macOS
 .DS_Store
-# Build artifacts
 *.o
 *.obj
 *.lo
@@ -14,10 +12,8 @@
 *.elf
 ascii_studio
 
-# Dependency files
 *.d
 
-# IDE / editor files
 *.swp
 *~
 *.tmp
@@ -27,5 +23,5 @@ ascii_studio
 .idea/
 *.iml
 
-# Generated app config
 imgui.ini
+asset/

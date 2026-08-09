@@ -1,4 +1,4 @@
-# Image & character
+# Image & Character
 
 A custom ascii art generator that fits my need!
 
@@ -6,13 +6,11 @@ A custom ascii art generator that fits my need!
 -	text mode toggle for text box
 -	glith effet: remplace certains characters by random character from an input
 -	unicode UTF8, add more range
--	slidebar for font and its size
 -	export img as text file
--   no text when exported as a transparent canvas
 -   unwanted glitch on sliding bars
+-   character spacing fucks up aspect ratio
 
-character set:
-density_c = (
+ramp set:(
     " .:-=+*#%@"          # ASCII base
     "✧✦✩✪✫✬✭✮✯✰"        # Stars (light / airy)
     "✿❀❁❂❃❉❊❋"          # Flowers (slightly denser)

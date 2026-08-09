@@ -28,7 +28,8 @@ IMGUI_SRCS := $(IMGUI_DIR)/imgui.cpp \
 
 GLAD_SRCS := $(GLAD_DIR)/src/glad.c
 
-APP_CPP_SRCS := src/main.cpp
+APP_CPP_SRCS := src/main.cpp \
+				src/FontConfig.cpp
 APP_OBJC_SRCS := src/NativeFileDialog.mm
 
 OBJS := $(APP_CPP_SRCS:.cpp=.o) $(APP_OBJC_SRCS:.mm=.o) $(IMGUI_SRCS:.cpp=.o) $(GLAD_SRCS:.c=.o)

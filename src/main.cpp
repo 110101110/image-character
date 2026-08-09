@@ -22,7 +22,7 @@
 #include "stb_image_write.h"
 
 #include "NativeFileDialog.h"
-
+#include "FontConfig.h"
 struct ImageBuffer
 {
 	unsigned char *pixels = nullptr;
@@ -115,20 +115,10 @@ GLuint create_texture_from_pixels(const unsigned char *pixels, int w, int h, int
 	return tex;
 }
 
-//function to export ascii layer to image file
-void export_ascii_to_file(const std::string &filepath,
-									const AsciiOutput &ascii,
-									float spacing_x, float spacing_y,
-									ImVec4 bg_col, ImVec4 text_col,
-									float glitch_intensity,
-									bool export_full_canvas,
-									ImVec2 viewport_size,
-									float export_scale = 2.0f)
+void export_ascii_to_file(const std::string &filepath, const AsciiOutput &ascii, ImFont *ascii_font, float ascii_font_size, float spacing_x, float spacing_y, ImVec4 bg_col, ImVec4 text_col, float glitch_intensity, bool export_full_canvas, ImVec2 viewport_size, float export_scale = 2.0f)
 {
 	if (filepath.empty() || ascii.text.empty() || ascii.cols <= 0 || ascii.rows <= 0)
 		return;
-
-	// 1. Calculate Base and Scaled Export Canvas Dimensions
 	float base_w = export_full_canvas ? (ascii.cols * spacing_x) : viewport_size.x;
 	float base_h = export_full_canvas ? (ascii.rows * spacing_y) : viewport_size.y;
 
@@ -142,7 +132,6 @@ void export_ascii_to_file(const std::string &filepath,
 	float scaled_spacing_y = spacing_y * export_scale;
 	float scaled_glitch = glitch_intensity * export_scale;
 
-	// 2. Allocate Image Buffer & Fill with Canvas Background Color
 	std::vector<unsigned char> image_data(export_w * export_h * 4);
 
 	unsigned char bg_r = static_cast<unsigned char>(std::clamp(bg_col.x * 255.0f, 0.0f, 255.0f));
@@ -158,16 +147,43 @@ void export_ascii_to_file(const std::string &filepath,
 		image_data[i * 4 + 3] = bg_a;
 	}
 
-	// 3. Obtain Font Atlas & Active ImFont
+	ImFontBaked *baked_font = ascii_font->GetFontBaked(ascii_font_size);
+	if (!baked_font)
+		return;
+
+	{
+		const char *preload_ptr = ascii.text.c_str();
+		const char *preload_end =
+			preload_ptr + ascii.text.size();
+
+		while (preload_ptr < preload_end)
+		{
+			unsigned int codepoint = 0;
+
+			const int bytes_consumed = ImTextCharFromUtf8(
+				&codepoint,
+				preload_ptr,
+				preload_end);
+
+			if (bytes_consumed <= 0)
+				break;
+
+			preload_ptr += bytes_consumed;
+
+			if (codepoint != '\n' && codepoint != '\r')
+			{
+				baked_font->FindGlyph(
+					static_cast<ImWchar>(codepoint));
+			}
+		}
+	}
+
 	ImGuiIO &io = ImGui::GetIO();
 	unsigned char *font_pixels = nullptr;
 	int font_tex_w = 0, font_tex_h = 0;
-
-	// Fetch RGBA32 Font Atlas for OpenGL3 backend compatibility
 	io.Fonts->GetTexDataAsRGBA32(&font_pixels, &font_tex_w, &font_tex_h);
-	ImFont *font = ImGui::GetFont();
 
-	if (font && font_pixels && font_tex_w > 0 && font_tex_h > 0)
+	if (font_pixels && font_tex_w > 0 && font_tex_h > 0)
 	{
 		std::mt19937 rng(1337);
 		std::uniform_real_distribution<float> jitter_dist(-scaled_glitch, scaled_glitch);
@@ -177,7 +193,6 @@ void export_ascii_to_file(const std::string &filepath,
 		const char *text_ptr = ascii.text.c_str();
 		const char *text_end = text_ptr + ascii.text.size();
 
-		// 4. Decode Multi-Byte UTF-8 Characters Sequentially
 		while (text_ptr < text_end)
 		{
 			unsigned int codepoint = 0;
@@ -187,18 +202,16 @@ void export_ascii_to_file(const std::string &filepath,
 				break;
 			text_ptr += bytes_consumed;
 
+			if (codepoint == '\r')
+				continue;
 			if (codepoint == '\n')
 			{
-				row++;
+				++row;
 				col = 0;
 				continue;
 			}
 
-			// --- FIX FOR FindGlyph ERROR ---
-			// Route lookup through font->Baked.FindGlyph() defined in imgui_draw.h
-			const ImFontGlyph *glyph = (font && font->LastBaked)
-										   ? font->LastBaked->FindGlyph(static_cast<ImWchar>(codepoint))
-										   : nullptr;
+			const ImFontGlyph *glyph = baked_font->FindGlyph(static_cast<ImWchar>(codepoint));
 
 			if (glyph && glyph->Visible)
 			{
@@ -312,44 +325,22 @@ int main()
 	ImGuiIO &io = ImGui::GetIO();
 	ImGui::StyleColorsLight();
 
-	// 1. Build custom Glyph Ranges array covering ASCII + Box Drawing + Block Elements
-	static const ImWchar custom_glyph_ranges[] = {
-		0x0020,
-		0x00FF, // Basic Latin + Latin Supplement
-		0x2500,
-		0x257F, // Box Drawing (│ ─ ┌ ┐ └ ┘)
-		0x2580,
-		0x259F, // Block Elements (█ ▄ ▀ ▌ ▐)
-		0,
-	};
-	// 2. Load TTF/OTF font with custom Unicode ranges (e.g. Menlo, JetBrains Mono, Fira Code)
-	ImFontConfig font_config;
-	font_config.OversampleH = 2;
-	font_config.OversampleV = 2;
-
-	// Load a macOS native monospace font with box-drawing support
-	ImFont *main_font = io.Fonts->AddFontFromFileTTF(
-		"/System/Library/Fonts/Supplemental/Courier New.ttf",
-		16.0f,
-		&font_config,
-		custom_glyph_ranges);
-
-	if (!main_font)
-	{
-		// Fallback to ImGui default font with extended ranges
-		io.Fonts->AddFontDefault();
-	}
-
 	ImGui_ImplGlfw_InitForOpenGL(window, true);
 	ImGui_ImplOpenGL3_Init("#version 410");
 
 	ImageBuffer current_img;
+	std::string current_file_path = "";
 	AsciiOutput ascii_art;
 
-	std::string current_file_path = "";
 	char ramp_buffer[128] = " .:-=+*#%@";
 
-	// Grid controls
+	int selected_ascii_font = 0;
+	float ascii_font_size = 14.0f;
+	bool pending_font_rebuild = false;
+	FontConfig::FontSet fonts = FontConfig::rebuild_font_atlas(FontConfig::builtin_ascii_fonts[selected_ascii_font], ascii_font_size);
+	float char_spacing_x = 7.0f;
+	float char_spacing_y = 12.0f;
+
 	int target_columns = 100;
 	int target_rows = 50;
 	bool lock_aspect = true;
@@ -362,23 +353,20 @@ int main()
 	bool show_base_layer = true;
 	bool show_ascii_layer = true;
 
+	ImVec4 text_color = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
+	ImVec4 bg_color = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
 
-	ImVec4 text_color = ImVec4(0.0f, 1.0f, 0.4f, 1.0f);
-	ImVec4 bg_color = ImVec4(0.05f, 0.05f, 0.05f, 1.0f);
-
-	// Spacing & Glitch Controls
-	float char_spacing_x = 7.0f;   // Horizontal kerning (px)
-	float char_spacing_y = 12.0f;  // Vertical line spacing (px)
-	float glitch_intensity = 0.0f; // Random jitter offset
+	// Glitch
+	float glitch_intensity = 0.0f;
 	bool glitch_per_frame = false;
 
-	bool export_full_canvas = false;				 // Toggle between full grid and viewport-only export
+	bool export_full_canvas = false;
 	ImVec2 current_viewport_size = ImVec2(0, 0); // Stores live Viewport dimensions
 
 	bool pending_export = false;
 	std::string export_file_path = "";
 
-	std::mt19937 rng(1337);
+	std::mt19937 main_rng(1337);
 
 	while (!glfwWindowShouldClose(window))
 	{
@@ -393,10 +381,9 @@ int main()
 		ImGui_ImplGlfw_NewFrame();
 		ImGui::NewFrame();
 
-		// Sidebar
 		ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
 		ImGui::SetNextWindowSize(ImVec2(360, io.DisplaySize.y), ImGuiCond_Always);
-		ImGui::Begin("Glitch & Matrix Controls", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove);
+		ImGui::Begin("Glitch & Matrix Controls", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
 		ImGui::Text("1. Reference Image");
 		if (ImGui::Button("Open File (Native Dialog)...", ImVec2(-1, 30)))
@@ -434,25 +421,31 @@ int main()
 		ImGui::Separator();
 		ImGui::Text("2. Image Grid & Ratio Controls");
 		ImGui::Checkbox("Lock Aspect Ratio", &lock_aspect);
+		ImGui::Text("Grid Resolution: %d x %d", ascii_art.cols, ascii_art.rows);
+
 		bool grid_changed = false;
 		if (ImGui::SliderInt("Columns (X)", &target_columns, 10, 500))
+		{
 			grid_changed = true;
-
-		if (lock_aspect && grid_changed && current_img.height > 0)
-		{
-			float aspect = static_cast<float>(current_img.height) / static_cast<float>(current_img.width);
-			target_rows = std::max(1, static_cast<int>(target_columns * aspect * 0.55f));
+			if (lock_aspect && current_img.height > 0 && current_img.width > 0)
+			{
+				float aspect = static_cast<float>(current_img.height) / static_cast<float>(current_img.width);
+				target_rows = std::max(1, static_cast<int>(target_columns * aspect * 0.55f));
+			}
 		}
-		else
+		if (ImGui::SliderInt("Rows (Y)", &target_rows, 10, 500))
 		{
-			if (ImGui::SliderInt("Rows (Y)", &target_rows, 10, 500))
-				grid_changed = true;
+			grid_changed = true;
+			if (lock_aspect && current_img.height > 0 && current_img.width > 0)
+			{
+				float inv_aspect = static_cast<float>(current_img.width) / static_cast<float>(current_img.height);
+				target_columns = std::max(1, static_cast<int>((target_rows / 0.55f) * inv_aspect));
+			}
 		}
 		if (grid_changed && current_img.pixels)
 		{
 			ascii_art = generate_ascii(current_img, target_columns, target_rows, brightness, contrast, invert_image,ramp_buffer);
 		}
-		ImGui::Text("Grid Resolution: %d x %d", ascii_art.cols, ascii_art.rows);
 
 		ImGui::Separator();
 		ImGui::Text("3. Image Inversion & Processing");
@@ -468,14 +461,42 @@ int main()
 		}
 
 		ImGui::Separator();
-		ImGui::Text("4. Character Spacing & Glitch Mechanics");
+		ImGui::Text("4. Character Setting");
+		if (ImGui::BeginCombo("Font", FontConfig::builtin_ascii_fonts[selected_ascii_font].name))
+		{
+			for (int i = 0; i < static_cast<int>(FontConfig::builtin_ascii_font_count); ++i)
+			{
+				bool selected = (selected_ascii_font == i);
+
+				if (ImGui::Selectable(FontConfig::builtin_ascii_fonts[i].name, selected))
+				{
+					selected_ascii_font = i;
+					pending_font_rebuild = true;
+				}
+
+				if (selected)
+				{
+					ImGui::SetItemDefaultFocus();
+				}
+			}
+
+			ImGui::EndCombo();
+		}
+		ImGui::SliderFloat("Font Size", &ascii_font_size, 8.0f, 64.0f, "%.1f");
+		if (ImGui::IsItemDeactivatedAfterEdit())
+		{
+			pending_font_rebuild = true;
+		}
 		ImGui::SliderFloat("Horizontal Spacing", &char_spacing_x, 1.0f, 30.0f);
 		ImGui::SliderFloat("Vertical Spacing", &char_spacing_y, 1.0f, 30.0f);
+
+		ImGui::Separator();
+		ImGui::Text("5.Glitch Mechanics");
 		ImGui::SliderFloat("Glitch Jitter", &glitch_intensity, 0.0f, 50.0f);
 		ImGui::Checkbox("Animate Glitch", &glitch_per_frame);
 
 		ImGui::Separator();
-		ImGui::Text("5. Color & Layer Opacity");
+		ImGui::Text("6. Color & Layer Opacity");
 		ImGui::ColorEdit4("Canvas Background", (float *)&bg_color);
 		ImGui::ColorEdit4("Text Color", (float *)&text_color);
 		ImGui::Checkbox("Show Base Image", &show_base_layer);
@@ -483,7 +504,7 @@ int main()
 		ImGui::Checkbox("Show ASCII Overlay", &show_ascii_layer);
 
 		ImGui::Separator();
-		ImGui::Text("6. Exports");
+		ImGui::Text("7. Exports");
 		ImGui::Checkbox("Export Entire ASCII Canvas", &export_full_canvas);
 		if (ImGui::Button("Export Image (.PNG / .JPG)", ImVec2(-1, 30)))
 		{
@@ -491,7 +512,7 @@ int main()
 			if (!save_path.empty())
 			{
 				export_file_path = save_path;
-				pending_export = true; // Schedule export for end-of-frame to prevent frame state assertions
+				pending_export = true;
 			}
 		}
 		ImGui::End();
@@ -510,7 +531,6 @@ int main()
 			float canvas_w = ascii_art.cols * char_spacing_x;
 			float canvas_h = ascii_art.rows * char_spacing_y;
 
-			// 1. Draw Base Reference Layer (Stretched to match custom output grid)
 			if (show_base_layer)
 			{
 				ImU32 tint = ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 1.0f, 1.0f, base_opacity));
@@ -522,42 +542,49 @@ int main()
 					tint);
 			}
 
-			// 2. Custom Character-by-Character Glitch & Spacing Rendering Pipeline
-			// to be reviewed really
 			if (show_ascii_layer && !ascii_art.text.empty())
 			{
 				ImU32 txt_col = ImGui::ColorConvertFloat4ToU32(text_color);
-				ImFont *font = ImGui::GetFont();
-				float font_size = ImGui::GetFontSize();
 
 				if (!glitch_per_frame)
 				{
-					rng.seed(1337);
+					main_rng.seed(1337);
 				}
 				std::uniform_real_distribution<float> jitter_dist(-glitch_intensity, glitch_intensity);
 
 				int col = 0;
 				int row = 0;
 
-				for (char ch : ascii_art.text)
+				const char *text_ptr = ascii_art.text.c_str();
+				const char *text_end = text_ptr + ascii_art.text.size();
+
+				//rendering loop with extended unicode
+				while (text_ptr < text_end)
 				{
-					if (ch == '\n')
+					unsigned int codepoint = 0;
+					int bytes_consumed = ImTextCharFromUtf8(&codepoint, text_ptr, text_end);
+					if (bytes_consumed <= 0)
+						break;
+
+					text_ptr += bytes_consumed;
+
+					if (codepoint == '\n')
 					{
 						row++;
 						col = 0;
 						continue;
 					}
 
-					// Apply character spacing + random glitch displacement
-					float offset_x = (glitch_intensity > 0.0f) ? jitter_dist(rng) : 0.0f;
-					float offset_y = (glitch_intensity > 0.0f) ? jitter_dist(rng) : 0.0f;
+					float offset_x = (glitch_intensity > 0.0f) ? jitter_dist(main_rng) : 0.0f;
+					float offset_y = (glitch_intensity > 0.0f) ? jitter_dist(main_rng) : 0.0f;
 
 					ImVec2 char_pos(
 						canvas_pos.x + (col * char_spacing_x) + offset_x,
 						canvas_pos.y + (row * char_spacing_y) + offset_y);
 
-					char buf[2] = {ch, '\0'};
-					draw_list->AddText(font, font_size, char_pos, txt_col, buf);
+					char buf[5] = {0};
+					ImTextCharToUtf8(buf, codepoint);
+					draw_list->AddText(fonts.ascii_font, ascii_font_size, char_pos, txt_col, buf);
 
 					col++;
 				}
@@ -571,7 +598,6 @@ int main()
 		}
 		ImGui::End();
 
-		// Render Frame
 		ImGui::Render();
 
 		int display_w, display_h;
@@ -582,12 +608,13 @@ int main()
 
 		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-		// Execute deferred image export safely after ImGui render pass completes
 		if (pending_export)
 		{
 			export_ascii_to_file(
 				export_file_path,
 				ascii_art,
+				fonts.ascii_font,
+				ascii_font_size,
 				char_spacing_x,
 				char_spacing_y,
 				bg_color,
@@ -596,6 +623,11 @@ int main()
 				export_full_canvas,
 				current_viewport_size);
 			pending_export = false;
+		}
+		if (pending_font_rebuild)
+		{
+			fonts = FontConfig::rebuild_font_atlas(FontConfig::builtin_ascii_fonts[selected_ascii_font], ascii_font_size);
+			pending_font_rebuild = false;
 		}
 
 		glfwSwapBuffers(window);
