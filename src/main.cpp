@@ -1,7 +1,5 @@
 #include <iostream>
-#include <vector>
 #include <string>
-#include <cmath>
 #include <algorithm>
 #include <random>
 
@@ -15,284 +13,12 @@
 #include "imgui_impl_opengl3.h"
 #include "imgui_internal.h"
 
-#define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
-
 #include "NativeFileDialog.h"
-#include "FontConfig.h"
-struct ImageBuffer
-{
-	unsigned char *pixels = nullptr;
-	int width = 0;
-	int height = 0;
-	int channels = 0;
-	GLuint textureID = 0;
-};
+#include "AsciiArt.h"
 
-struct AsciiOutput
-{
-	std::string text;
-	int cols = 0;
-	int rows = 0;
-};
-
-//the rendering function
-AsciiOutput generate_ascii(const ImageBuffer &img, int target_cols, int target_rows,
-						   float brightness, float contrast, bool invert, const std::string &ramp)
-{
-	AsciiOutput out;
-	if (!img.pixels || img.width <= 0 || img.height <= 0 || target_cols <= 0 || target_rows <= 0)
-		return out;
-
-	int ramp_len = static_cast<int>(ramp.length());
-	if (ramp_len == 0)
-		return out;
-
-	out.cols = target_cols;
-	out.rows = target_rows;
-	out.text.reserve((target_cols + 1) * target_rows);
-
-	float cell_w = static_cast<float>(img.width) / target_cols;
-	float cell_h = static_cast<float>(img.height) / target_rows;
-
-	for (int r = 0; r < target_rows; ++r)
-	{
-		for (int c = 0; c < target_cols; ++c)
-		{
-			int start_x = static_cast<int>(c * cell_w);
-			int start_y = static_cast<int>(r * cell_h);
-			int end_x = std::min(static_cast<int>((c + 1) * cell_w), img.width);
-			int end_y = std::min(static_cast<int>((r + 1) * cell_h), img.height);
-
-			float total_lum = 0.0f;
-			int pixel_count = 0;
-
-			for (int y = start_y; y < end_y; ++y)
-			{
-				for (int x = start_x; x < end_x; ++x)
-				{
-					int idx = (y * img.width + x) * img.channels;
-					float red = img.pixels[idx + 0];
-					float green = img.pixels[idx + 1];
-					float blue = img.pixels[idx + 2];
-
-					// Rec. 709 Luminance [cite: 11]
-					float lum = 0.2126f * red + 0.7152f * green + 0.0722f * blue;
-					if (invert)
-					{
-						lum = 255.0f - lum;
-					}
-					total_lum += lum;
-					pixel_count++;
-				}
-			}
-
-			float avg_lum = (pixel_count > 0) ? (total_lum / pixel_count) : 0.0f;
-			avg_lum = (avg_lum - 128.0f) * contrast + 128.0f + brightness;
-			avg_lum = std::clamp(avg_lum, 0.0f, 255.0f);
-
-			int ramp_idx = static_cast<int>((avg_lum / 255.0f) * (ramp_len - 1));
-			out.text += ramp[ramp_idx];
-		}
-		out.text += '\n';
-	}
-
-	return out;
-}
-
-GLuint create_texture_from_pixels(const unsigned char *pixels, int w, int h, int channels)
-{
-	GLuint tex;
-	glGenTextures(1, &tex);
-	glBindTexture(GL_TEXTURE_2D, tex);
-	GLenum format = (channels == 4) ? GL_RGBA : GL_RGB;
-	glTexImage2D(GL_TEXTURE_2D, 0, format, w, h, 0, format, GL_UNSIGNED_BYTE, pixels);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	return tex;
-}
-
-void export_ascii_to_file(const std::string &filepath, const AsciiOutput &ascii, ImFont *ascii_font, float ascii_font_size, float spacing_x, float spacing_y, ImVec4 bg_col, ImVec4 text_col, float glitch_intensity, bool export_full_canvas, ImVec2 viewport_size, float export_scale = 2.0f)
-{
-	if (filepath.empty() || ascii.text.empty() || ascii.cols <= 0 || ascii.rows <= 0)
-		return;
-	float base_w = export_full_canvas ? (ascii.cols * spacing_x) : viewport_size.x;
-	float base_h = export_full_canvas ? (ascii.rows * spacing_y) : viewport_size.y;
-
-	if (base_w <= 0.0f || base_h <= 0.0f)
-		return;
-
-	int export_w = static_cast<int>(base_w * export_scale);
-	int export_h = static_cast<int>(base_h * export_scale);
-
-	float scaled_spacing_x = spacing_x * export_scale;
-	float scaled_spacing_y = spacing_y * export_scale;
-	float scaled_glitch = glitch_intensity * export_scale;
-
-	std::vector<unsigned char> image_data(export_w * export_h * 4);
-
-	unsigned char bg_r = static_cast<unsigned char>(std::clamp(bg_col.x * 255.0f, 0.0f, 255.0f));
-	unsigned char bg_g = static_cast<unsigned char>(std::clamp(bg_col.y * 255.0f, 0.0f, 255.0f));
-	unsigned char bg_b = static_cast<unsigned char>(std::clamp(bg_col.z * 255.0f, 0.0f, 255.0f));
-	unsigned char bg_a = static_cast<unsigned char>(std::clamp(bg_col.w * 255.0f, 0.0f, 255.0f));
-
-	for (int i = 0; i < export_w * export_h; ++i)
-	{
-		image_data[i * 4 + 0] = bg_r;
-		image_data[i * 4 + 1] = bg_g;
-		image_data[i * 4 + 2] = bg_b;
-		image_data[i * 4 + 3] = bg_a;
-	}
-
-	ImFontBaked *baked_font = ascii_font->GetFontBaked(ascii_font_size);
-	if (!baked_font)
-		return;
-
-	{
-		const char *preload_ptr = ascii.text.c_str();
-		const char *preload_end =
-			preload_ptr + ascii.text.size();
-
-		while (preload_ptr < preload_end)
-		{
-			unsigned int codepoint = 0;
-
-			const int bytes_consumed = ImTextCharFromUtf8(
-				&codepoint,
-				preload_ptr,
-				preload_end);
-
-			if (bytes_consumed <= 0)
-				break;
-
-			preload_ptr += bytes_consumed;
-
-			if (codepoint != '\n' && codepoint != '\r')
-			{
-				baked_font->FindGlyph(
-					static_cast<ImWchar>(codepoint));
-			}
-		}
-	}
-
-	ImGuiIO &io = ImGui::GetIO();
-	unsigned char *font_pixels = nullptr;
-	int font_tex_w = 0, font_tex_h = 0;
-	io.Fonts->GetTexDataAsRGBA32(&font_pixels, &font_tex_w, &font_tex_h);
-
-	if (font_pixels && font_tex_w > 0 && font_tex_h > 0)
-	{
-		std::mt19937 rng(1337);
-		std::uniform_real_distribution<float> jitter_dist(-scaled_glitch, scaled_glitch);
-
-		int col = 0, row = 0;
-
-		const char *text_ptr = ascii.text.c_str();
-		const char *text_end = text_ptr + ascii.text.size();
-
-		while (text_ptr < text_end)
-		{
-			unsigned int codepoint = 0;
-			int bytes_consumed = ImTextCharFromUtf8(&codepoint, text_ptr, text_end);
-
-			if (bytes_consumed <= 0)
-				break;
-			text_ptr += bytes_consumed;
-
-			if (codepoint == '\r')
-				continue;
-			if (codepoint == '\n')
-			{
-				++row;
-				col = 0;
-				continue;
-			}
-
-			const ImFontGlyph *glyph = baked_font->FindGlyph(static_cast<ImWchar>(codepoint));
-
-			if (glyph && glyph->Visible)
-			{
-				float offset_x = (scaled_glitch > 0.0f) ? jitter_dist(rng) : 0.0f;
-				float offset_y = (scaled_glitch > 0.0f) ? jitter_dist(rng) : 0.0f;
-
-				float char_base_x = (col * scaled_spacing_x) + offset_x + (glyph->X0 * export_scale);
-				float char_base_y = (row * scaled_spacing_y) + offset_y + (glyph->Y0 * export_scale);
-
-				int src_u0 = static_cast<int>(glyph->U0 * font_tex_w);
-				int src_v0 = static_cast<int>(glyph->V0 * font_tex_h);
-				int src_u1 = static_cast<int>(glyph->U1 * font_tex_w);
-				int src_v1 = static_cast<int>(glyph->V1 * font_tex_h);
-
-				int glyph_tex_w = std::max(1, src_u1 - src_u0);
-				int glyph_tex_h = std::max(1, src_v1 - src_v0);
-
-				int dst_draw_w = static_cast<int>((glyph->X1 - glyph->X0) * export_scale);
-				int dst_draw_h = static_cast<int>((glyph->Y1 - glyph->Y0) * export_scale);
-
-				// Bilinear alpha blending for subpixel accuracy
-				for (int dy = 0; dy < dst_draw_h; ++dy)
-				{
-					for (int dx = 0; dx < dst_draw_w; ++dx)
-					{
-						int dst_x = static_cast<int>(char_base_x) + dx;
-						int dst_y = static_cast<int>(char_base_y) + dy;
-
-						if (dst_x >= 0 && dst_x < export_w && dst_y >= 0 && dst_y < export_h)
-						{
-							int src_x = src_u0 + (dx * glyph_tex_w) / std::max(1, dst_draw_w);
-							int src_y = src_v0 + (dy * glyph_tex_h) / std::max(1, dst_draw_h);
-
-							if (src_x >= 0 && src_x < font_tex_w && src_y >= 0 && src_y < font_tex_h)
-							{
-								int pixel_index = (src_y * font_tex_w + src_x) * 4;
-								unsigned char alpha = font_pixels[pixel_index + 3];
-								if (alpha > 0)
-								{
-									float src_a = (alpha / 255.0f) * text_col.w;
-									int dst_idx = (dst_y * export_w + dst_x) * 4;
-
-									// Straight-alpha source-over compositing.
-									float dst_a = image_data[dst_idx + 3] / 255.0f;
-									float out_a = src_a + dst_a * (1.0f - src_a);
-
-									if (out_a > 0.0f)
-									{
-										float dst_r = image_data[dst_idx + 0] / 255.0f;
-										float dst_g = image_data[dst_idx + 1] / 255.0f;
-										float dst_b = image_data[dst_idx + 2] / 255.0f;
-
-										float out_r = (text_col.x * src_a + dst_r * dst_a * (1.0f - src_a)) / out_a;
-										float out_g = (text_col.y * src_a + dst_g * dst_a * (1.0f - src_a)) / out_a;
-										float out_b = (text_col.z * src_a + dst_b * dst_a * (1.0f - src_a)) / out_a;
-
-										image_data[dst_idx + 0] = static_cast<unsigned char>(std::clamp(out_r * 255.0f, 0.0f, 255.0f));
-										image_data[dst_idx + 1] = static_cast<unsigned char>(std::clamp(out_g * 255.0f, 0.0f, 255.0f));
-										image_data[dst_idx + 2] = static_cast<unsigned char>(std::clamp(out_b * 255.0f, 0.0f, 255.0f));
-										image_data[dst_idx + 3] = static_cast<unsigned char>(std::clamp(out_a * 255.0f, 0.0f, 255.0f));
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-			col++;
-		}
-	}
-
-	// 5. Write to PNG or JPG File via stb_image_write
-	if (filepath.ends_with(".jpg") || filepath.ends_with(".jpeg"))
-	{
-		stbi_write_jpg(filepath.c_str(), export_w, export_h, 4, image_data.data(), 95);
-	}
-	else
-	{
-		stbi_write_png(filepath.c_str(), export_w, export_h, 4, image_data.data(), export_w * 4);
-	}
-}
+using namespace AsciiArt;
 
 int main()
 {
@@ -304,7 +30,12 @@ int main()
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 
-	GLFWwindow *window = glfwCreateWindow(1400, 850, "ASCII Art", nullptr, nullptr);
+	GLFWwindow *window = glfwCreateWindow(
+		Config::window_width,
+		Config::window_height,
+		Config::window_title,
+		nullptr,
+		nullptr);
 	if (!window)
 	{
 		glfwTerminate();
@@ -326,7 +57,7 @@ int main()
 	ImGui::StyleColorsLight();
 
 	ImGui_ImplGlfw_InitForOpenGL(window, true);
-	ImGui_ImplOpenGL3_Init("#version 410");
+	ImGui_ImplOpenGL3_Init(Config::glsl_version);
 
 	ImageBuffer current_img;
 	std::string current_file_path = "";
@@ -335,14 +66,14 @@ int main()
 	char ramp_buffer[128] = " .:-=+*#%@";
 
 	int selected_ascii_font = 0;
-	float ascii_font_size = 14.0f;
+	float ascii_font_size = Config::default_ascii_font_size;
 	bool pending_font_rebuild = false;
-	FontConfig::FontSet fonts = FontConfig::rebuild_font_atlas(FontConfig::builtin_ascii_fonts[selected_ascii_font], ascii_font_size);
-	float char_spacing_x = 7.0f;
-	float char_spacing_y = 12.0f;
+	FontSet fonts = rebuild_font_atlas(builtin_ascii_fonts[selected_ascii_font], ascii_font_size);
+	float char_spacing_x = Config::default_spacing_x;
+	float char_spacing_y = Config::default_spacing_y;
 
-	int target_columns = 100;
-	int target_rows = 50;
+	int target_columns = Config::default_columns;
+	int target_rows = Config::default_rows;
 	bool lock_aspect = true;
 
 	// Tuning
@@ -382,11 +113,11 @@ int main()
 		ImGui::NewFrame();
 
 		ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
-		ImGui::SetNextWindowSize(ImVec2(360, io.DisplaySize.y), ImGuiCond_Always);
-		ImGui::Begin("Glitch & Matrix Controls", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysVerticalScrollbar);
+		ImGui::SetNextWindowSize(ImVec2(Config::sidebar_width, io.DisplaySize.y), ImGuiCond_Always);
+		ImGui::Begin("Glitch & Matrix Controls", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar);
 
 		ImGui::Text("1. Reference Image");
-		if (ImGui::Button("Open File (Native Dialog)...", ImVec2(-1, 30)))
+		if (ImGui::Button("Open File ...", ImVec2(-1, 30)))
 		{
 			std::string selected_path = OpenNativeImageDialog();
 			if (!selected_path.empty())
@@ -396,8 +127,7 @@ int main()
 				unsigned char *data = stbi_load(current_file_path.c_str(), &w, &h, &ch, 4);
 				if (data)
 				{
-					if (current_img.pixels) stbi_image_free(current_img.pixels);
-					if (current_img.textureID) glDeleteTextures(1, &current_img.textureID);
+					destroy_image_buffer(current_img);
 
 					current_img.pixels = data;
 					current_img.width = w;
@@ -406,8 +136,11 @@ int main()
 					current_img.textureID = create_texture_from_pixels(data, w, h, 4);
 
 					target_columns = 80;
-					float aspect = static_cast<float>(h) / static_cast<float>(w);
-					target_rows = std::max(1, static_cast<int>(target_columns * aspect * 0.55f));
+					target_rows = calculate_locked_rows(
+						current_img,
+						target_columns,
+						char_spacing_x,
+						char_spacing_y);
 
 					ascii_art = generate_ascii(current_img, target_columns, target_rows, brightness, contrast, invert_image,ramp_buffer);
 				}
@@ -420,26 +153,37 @@ int main()
 
 		ImGui::Separator();
 		ImGui::Text("2. Image Grid & Ratio Controls");
-		ImGui::Checkbox("Lock Aspect Ratio", &lock_aspect);
+		const bool aspect_lock_changed = ImGui::Checkbox("Lock Aspect Ratio", &lock_aspect);
+		if (aspect_lock_changed && lock_aspect && current_img.pixels)
+		{
+			char_spacing_y = calculate_locked_spacing_y(
+				current_img, target_columns, target_rows, char_spacing_x);
+		}
 		ImGui::Text("Grid Resolution: %d x %d", ascii_art.cols, ascii_art.rows);
 
 		bool grid_changed = false;
-		if (ImGui::SliderInt("Columns (X)", &target_columns, 10, 500))
+		if (ImGui::DragInt("Columns (X)", &target_columns, 1, 10, 500))
 		{
 			grid_changed = true;
 			if (lock_aspect && current_img.height > 0 && current_img.width > 0)
 			{
-				float aspect = static_cast<float>(current_img.height) / static_cast<float>(current_img.width);
-				target_rows = std::max(1, static_cast<int>(target_columns * aspect * 0.55f));
+				target_rows = calculate_locked_rows(
+					current_img,
+					target_columns,
+					char_spacing_x,
+					char_spacing_y);
 			}
 		}
-		if (ImGui::SliderInt("Rows (Y)", &target_rows, 10, 500))
+		if (ImGui::DragInt("Rows (Y)", &target_rows, 1, 10, 500))
 		{
 			grid_changed = true;
 			if (lock_aspect && current_img.height > 0 && current_img.width > 0)
 			{
-				float inv_aspect = static_cast<float>(current_img.width) / static_cast<float>(current_img.height);
-				target_columns = std::max(1, static_cast<int>((target_rows / 0.55f) * inv_aspect));
+				target_columns = calculate_locked_columns(
+					current_img,
+					target_rows,
+					char_spacing_x,
+					char_spacing_y);
 			}
 		}
 		if (grid_changed && current_img.pixels)
@@ -448,7 +192,7 @@ int main()
 		}
 
 		ImGui::Separator();
-		ImGui::Text("3. Image Inversion & Processing");
+		ImGui::Text("3. Image Processing");
 		if (ImGui::Checkbox("Invert Image Colors", &invert_image) ||
 			ImGui::SliderFloat("Brightness", &brightness, -100.0f, 100.0f) ||
 			ImGui::SliderFloat("Contrast", &contrast, 0.1f, 3.0f) ||
@@ -462,13 +206,13 @@ int main()
 
 		ImGui::Separator();
 		ImGui::Text("4. Character Setting");
-		if (ImGui::BeginCombo("Font", FontConfig::builtin_ascii_fonts[selected_ascii_font].name))
+		if (ImGui::BeginCombo("Font", builtin_ascii_fonts[selected_ascii_font].name))
 		{
-			for (int i = 0; i < static_cast<int>(FontConfig::builtin_ascii_font_count); ++i)
+			for (int i = 0; i < static_cast<int>(builtin_ascii_font_count); ++i)
 			{
 				bool selected = (selected_ascii_font == i);
 
-				if (ImGui::Selectable(FontConfig::builtin_ascii_fonts[i].name, selected))
+				if (ImGui::Selectable(builtin_ascii_fonts[i].name, selected))
 				{
 					selected_ascii_font = i;
 					pending_font_rebuild = true;
@@ -482,13 +226,30 @@ int main()
 
 			ImGui::EndCombo();
 		}
-		ImGui::SliderFloat("Font Size", &ascii_font_size, 8.0f, 64.0f, "%.1f");
+		ImGui::DragFloat(
+			"Font Size", &ascii_font_size,0.1f, Config::minimum_ascii_font_size,Config::maximum_ascii_font_size, "%.1f");
 		if (ImGui::IsItemDeactivatedAfterEdit())
 		{
 			pending_font_rebuild = true;
 		}
-		ImGui::SliderFloat("Horizontal Spacing", &char_spacing_x, 1.0f, 30.0f);
-		ImGui::SliderFloat("Vertical Spacing", &char_spacing_y, 1.0f, 30.0f);
+		const bool spacing_x_changed = ImGui::DragFloat(
+			"Horizontal Spacing", &char_spacing_x, 0.1f, 0.1f, 100.0f, "%.1f");
+		const bool spacing_y_changed = ImGui::DragFloat(
+			"Vertical Spacing", &char_spacing_y, 0.1f, 0.1f, 100.0f, "%.1f");
+
+		if (lock_aspect && current_img.pixels)
+		{
+			if (spacing_x_changed)
+			{
+				char_spacing_y = calculate_locked_spacing_y(
+					current_img, target_columns, target_rows, char_spacing_x);
+			}
+			else if (spacing_y_changed)
+			{
+				char_spacing_x = calculate_locked_spacing_x(
+					current_img, target_columns, target_rows, char_spacing_y);
+			}
+		}
 
 		ImGui::Separator();
 		ImGui::Text("5.Glitch Mechanics");
@@ -518,8 +279,10 @@ int main()
 		ImGui::End();
 
 		// Viewport
-		ImGui::SetNextWindowPos(ImVec2(360, 0), ImGuiCond_Always);
-		ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x - 360, io.DisplaySize.y), ImGuiCond_Always);
+		ImGui::SetNextWindowPos(ImVec2(Config::sidebar_width, 0), ImGuiCond_Always);
+		ImGui::SetNextWindowSize(
+			ImVec2(io.DisplaySize.x - Config::sidebar_width, io.DisplaySize.y),
+			ImGuiCond_Always);
 		ImGui::Begin("Canvas Viewport", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_HorizontalScrollbar);
 
 		current_viewport_size = ImGui::GetContentRegionAvail();
@@ -610,7 +373,7 @@ int main()
 
 		if (pending_export)
 		{
-			export_ascii_to_file(
+			export_to_image(
 				export_file_path,
 				ascii_art,
 				fonts.ascii_font,
@@ -626,17 +389,14 @@ int main()
 		}
 		if (pending_font_rebuild)
 		{
-			fonts = FontConfig::rebuild_font_atlas(FontConfig::builtin_ascii_fonts[selected_ascii_font], ascii_font_size);
+			fonts = rebuild_font_atlas(builtin_ascii_fonts[selected_ascii_font], ascii_font_size);
 			pending_font_rebuild = false;
 		}
 
 		glfwSwapBuffers(window);
 	}
 
-	if (current_img.pixels)
-		stbi_image_free(current_img.pixels);
-	if (current_img.textureID)
-		glDeleteTextures(1, &current_img.textureID);
+	destroy_image_buffer(current_img);
 
 	ImGui_ImplOpenGL3_Shutdown();
 	ImGui_ImplGlfw_Shutdown();

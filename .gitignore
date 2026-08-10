@@ -22,6 +22,6 @@ ascii_studio
 .vscode/
 .idea/
 *.iml
-
 imgui.ini
 asset/
+.clangd
