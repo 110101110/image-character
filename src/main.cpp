@@ -1,3 +1,6 @@
+#include <array>
+#include <cstdio>
+#include <cstring>
 #include <iostream>
 #include <string>
 #include <algorithm>
@@ -20,6 +23,82 @@
 
 using namespace AsciiArt;
 
+struct RampEditorState
+{
+	std::size_t cursor_byte = 0;
+};
+
+static int capture_ramp_cursor(ImGuiInputTextCallbackData *data)
+{
+	auto *state = static_cast<RampEditorState *>(data->UserData);
+	state->cursor_byte = static_cast<std::size_t>(std::max(0, data->CursorPos));
+	return 0;
+}
+
+static bool insert_utf8_at_cursor(
+	char *buffer,
+	std::size_t capacity,
+	std::size_t &cursor_byte,
+	const char *character,
+	std::size_t character_size)
+{
+	const std::size_t current_size = std::strlen(buffer);
+	cursor_byte = std::min(cursor_byte, current_size);
+	if (current_size + character_size >= capacity)
+		return false;
+
+	std::memmove(
+		buffer + cursor_byte + character_size,
+		buffer + cursor_byte,
+		current_size - cursor_byte + 1);
+	std::memcpy(buffer + cursor_byte, character, character_size);
+	cursor_byte += character_size;
+	return true;
+}
+
+static void present_imgui_frame(GLFWwindow *window)
+{
+	ImDrawData *draw_data = ImGui::GetDrawData();
+	if (!draw_data || draw_data->CmdListsCount == 0)
+		return;
+
+	int window_width = 0;
+	int window_height = 0;
+	int framebuffer_width = 0;
+	int framebuffer_height = 0;
+	glfwGetWindowSize(window, &window_width, &window_height);
+	glfwGetFramebufferSize(window, &framebuffer_width, &framebuffer_height);
+	if (window_width <= 0 || window_height <= 0 || framebuffer_width <= 0 || framebuffer_height <= 0)
+		return;
+
+	// During macOS live resize, GLFW may remain inside its native event loop. Update
+	// the cached draw data to the current drawable size so Cocoa does not stretch
+	// the previous framebuffer (which would visually resize every UI element).
+	const ImVec2 previous_display_size = draw_data->DisplaySize;
+	const ImVec2 previous_framebuffer_scale = draw_data->FramebufferScale;
+	draw_data->DisplaySize = ImVec2(
+		static_cast<float>(window_width),
+		static_cast<float>(window_height));
+	draw_data->FramebufferScale = ImVec2(
+		static_cast<float>(framebuffer_width) / static_cast<float>(window_width),
+		static_cast<float>(framebuffer_height) / static_cast<float>(window_height));
+
+	glfwMakeContextCurrent(window);
+	glViewport(0, 0, framebuffer_width, framebuffer_height);
+	glClearColor(0.12f, 0.12f, 0.14f, 1.0f);
+	glClear(GL_COLOR_BUFFER_BIT);
+	ImGui_ImplOpenGL3_RenderDrawData(draw_data);
+	glfwSwapBuffers(window);
+
+	draw_data->DisplaySize = previous_display_size;
+	draw_data->FramebufferScale = previous_framebuffer_scale;
+}
+
+static void refresh_window_during_live_resize(GLFWwindow *window)
+{
+	present_imgui_frame(window);
+}
+
 int main()
 {
 	if (!glfwInit())
@@ -29,6 +108,7 @@ int main()
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
 	glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
 	GLFWwindow *window = glfwCreateWindow(
 		Config::window_width,
@@ -41,7 +121,7 @@ int main()
 		glfwTerminate();
 		return -1;
 	}
-	glfwSetWindowAspectRatio(window, 16, 9);
+	glfwSetWindowSizeLimits(window, 800, 600, GLFW_DONT_CARE, GLFW_DONT_CARE);
 	glfwMakeContextCurrent(window);
 	glfwSwapInterval(1);
 
@@ -58,12 +138,15 @@ int main()
 
 	ImGui_ImplGlfw_InitForOpenGL(window, true);
 	ImGui_ImplOpenGL3_Init(Config::glsl_version);
+	glfwSetWindowRefreshCallback(window, refresh_window_during_live_resize);
 
 	ImageBuffer current_img;
 	std::string current_file_path = "";
 	AsciiOutput ascii_art;
 
-	char ramp_buffer[128] = " .:-=+*#%@";
+	std::array<char, 1024> ramp_buffer{};
+	std::snprintf(ramp_buffer.data(), ramp_buffer.size(), "%s", Config::default_ramp);
+	RampEditorState ramp_editor{std::strlen(ramp_buffer.data())};
 
 	int selected_ascii_font = 0;
 	float ascii_font_size = Config::default_ascii_font_size;
@@ -93,9 +176,12 @@ int main()
 
 	bool export_full_canvas = false;
 	ImVec2 current_viewport_size = ImVec2(0, 0); // Stores live Viewport dimensions
+	float viewport_zoom = 1.0f;
 
-	bool pending_export = false;
-	std::string export_file_path = "";
+	bool pending_image_export = false;
+	std::string image_export_path;
+	bool pending_text_export = false;
+	std::string text_export_path;
 
 	std::mt19937 main_rng(1337);
 
@@ -114,7 +200,14 @@ int main()
 
 		ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
 		ImGui::SetNextWindowSize(ImVec2(Config::sidebar_width, io.DisplaySize.y), ImGuiCond_Always);
-		ImGui::Begin("Glitch & Matrix Controls", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar);
+		ImGui::Begin(
+			"Matrix Controls",
+			nullptr,
+			ImGuiWindowFlags_NoResize |
+				ImGuiWindowFlags_NoMove |
+				ImGuiWindowFlags_NoCollapse |
+				ImGuiWindowFlags_NoSavedSettings |
+				ImGuiWindowFlags_NoScrollbar);
 
 		ImGui::Text("1. Reference Image");
 		if (ImGui::Button("Open File ...", ImVec2(-1, 30)))
@@ -142,7 +235,7 @@ int main()
 						char_spacing_x,
 						char_spacing_y);
 
-					ascii_art = generate_ascii(current_img, target_columns, target_rows, brightness, contrast, invert_image,ramp_buffer);
+					ascii_art = generate_ascii(current_img, target_columns, target_rows, brightness, contrast, invert_image, ramp_buffer.data());
 				}
 			}
 		}
@@ -188,24 +281,94 @@ int main()
 		}
 		if (grid_changed && current_img.pixels)
 		{
-			ascii_art = generate_ascii(current_img, target_columns, target_rows, brightness, contrast, invert_image,ramp_buffer);
+			ascii_art = generate_ascii(current_img, target_columns, target_rows, brightness, contrast, invert_image, ramp_buffer.data());
 		}
 
 		ImGui::Separator();
 		ImGui::Text("3. Image Processing");
-		if (ImGui::Checkbox("Invert Image Colors", &invert_image) ||
-			ImGui::SliderFloat("Brightness", &brightness, -100.0f, 100.0f) ||
-			ImGui::SliderFloat("Contrast", &contrast, 0.1f, 3.0f) ||
-			ImGui::InputText("Ramp String", ramp_buffer, IM_ARRAYSIZE(ramp_buffer)))
+		bool processing_changed = false;
+		processing_changed |= ImGui::Checkbox("Invert Image Colors", &invert_image);
+		processing_changed |= ImGui::SliderFloat("Brightness", &brightness, -100.0f, 100.0f);
+		processing_changed |= ImGui::SliderFloat("Contrast", &contrast, 0.1f, 3.0f);
+
+		ImGui::Separator();
+		ImGui::Text("4. Ramp Characters");
+		if (ImGui::InputText(
+			"Ramp",
+			ramp_buffer.data(),
+			ramp_buffer.size(),
+			ImGuiInputTextFlags_CallbackAlways,
+			capture_ramp_cursor,
+			&ramp_editor))
+		{
+			processing_changed = true;
+		}
+
+		if (ImGui::Button("Reverse Ramp", ImVec2(-1.0f, 0.0f)))
+		{
+			const std::string reversed = reverse_utf8(ramp_buffer.data());
+			std::memcpy(ramp_buffer.data(), reversed.c_str(), reversed.size() + 1);
+			ramp_editor.cursor_byte = reversed.size();
+			processing_changed = true;
+		}
+
+		if (ImGui::CollapsingHeader("Special Symbol Keyboard", ImGuiTreeNodeFlags_DefaultOpen))
+		{
+			for (int group_index = 0;
+				 group_index < static_cast<int>(special_symbol_group_count);
+				 ++group_index)
+			{
+				const SymbolGroup &group = special_symbol_groups[group_index];
+				ImGui::TextUnformatted(group.name);
+				ImGui::PushID(group_index);
+
+				const char *symbol_cursor = group.symbols;
+				const char *symbol_end = symbol_cursor + std::strlen(group.symbols);
+				int symbol_index = 0;
+				while (symbol_cursor < symbol_end)
+				{
+					unsigned int codepoint = 0;
+					const int byte_count = ImTextCharFromUtf8(&codepoint, symbol_cursor, symbol_end);
+					if (byte_count <= 0)
+						break;
+
+					const std::string button_label(symbol_cursor, static_cast<std::size_t>(byte_count));
+					ImGui::PushID(symbol_index);
+					if (ImGui::Button(button_label.c_str(), ImVec2(32.0f, 0.0f)))
+					{
+						if (insert_utf8_at_cursor(
+							ramp_buffer.data(),
+							ramp_buffer.size(),
+							ramp_editor.cursor_byte,
+							symbol_cursor,
+							static_cast<std::size_t>(byte_count)))
+						{
+							processing_changed = true;
+						}
+					}
+					ImGui::PopID();
+
+					symbol_cursor += byte_count;
+					++symbol_index;
+					if (symbol_cursor < symbol_end && symbol_index % 6 != 0)
+						ImGui::SameLine();
+				}
+
+				ImGui::PopID();
+			}
+		}
+
+		if (processing_changed)
 		{
 			if (current_img.pixels)
 			{
-				ascii_art = generate_ascii(current_img, target_columns, target_rows, brightness, contrast, invert_image, ramp_buffer);
+				ascii_art = generate_ascii(
+					current_img, target_columns, target_rows, brightness, contrast, invert_image, ramp_buffer.data());
 			}
 		}
 
 		ImGui::Separator();
-		ImGui::Text("4. Character Setting");
+		ImGui::Text("5. Character Setting");
 		if (ImGui::BeginCombo("Font", builtin_ascii_fonts[selected_ascii_font].name))
 		{
 			for (int i = 0; i < static_cast<int>(builtin_ascii_font_count); ++i)
@@ -252,12 +415,12 @@ int main()
 		}
 
 		ImGui::Separator();
-		ImGui::Text("5.Glitch Mechanics");
+		ImGui::Text("6. Glitch Mechanics");
 		ImGui::SliderFloat("Glitch Jitter", &glitch_intensity, 0.0f, 50.0f);
 		ImGui::Checkbox("Animate Glitch", &glitch_per_frame);
 
 		ImGui::Separator();
-		ImGui::Text("6. Color & Layer Opacity");
+		ImGui::Text("7. Color & Layer Opacity");
 		ImGui::ColorEdit4("Canvas Background", (float *)&bg_color);
 		ImGui::ColorEdit4("Text Color", (float *)&text_color);
 		ImGui::Checkbox("Show Base Image", &show_base_layer);
@@ -265,25 +428,62 @@ int main()
 		ImGui::Checkbox("Show ASCII Overlay", &show_ascii_layer);
 
 		ImGui::Separator();
-		ImGui::Text("7. Exports");
+		ImGui::Text("8. Exports");
 		ImGui::Checkbox("Export Entire ASCII Canvas", &export_full_canvas);
 		if (ImGui::Button("Export Image (.PNG / .JPG)", ImVec2(-1, 30)))
 		{
 			std::string save_path = SaveNativeFileDialog("ascii_art.png");
 			if (!save_path.empty())
 			{
-				export_file_path = save_path;
-				pending_export = true;
+				image_export_path = save_path;
+				pending_image_export = true;
+			}
+		}
+		if (ImGui::Button("Export Text (.TXT)", ImVec2(-1, 30)))
+		{
+			std::string save_path = SaveNativeFileDialog("ascii_art.txt");
+			if (!save_path.empty())
+			{
+				text_export_path = save_path;
+				pending_text_export = true;
 			}
 		}
 		ImGui::End();
 
 		// Viewport
-		ImGui::SetNextWindowPos(ImVec2(Config::sidebar_width, 0), ImGuiCond_Always);
+		const float viewport_x = Config::sidebar_width;
+		ImGui::SetNextWindowPos(ImVec2(viewport_x, 0), ImGuiCond_Always);
 		ImGui::SetNextWindowSize(
-			ImVec2(io.DisplaySize.x - Config::sidebar_width, io.DisplaySize.y),
+			ImVec2(std::max(1.0f, io.DisplaySize.x - viewport_x), io.DisplaySize.y),
 			ImGuiCond_Always);
-		ImGui::Begin("Canvas Viewport", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_HorizontalScrollbar);
+		ImGui::Begin(
+			"Canvas Viewport",
+			nullptr,
+			ImGuiWindowFlags_NoResize |
+			ImGuiWindowFlags_NoMove |
+				ImGuiWindowFlags_NoCollapse |
+				ImGuiWindowFlags_NoSavedSettings |
+				ImGuiWindowFlags_HorizontalScrollbar);
+
+		const bool viewport_hovered = ImGui::IsWindowHovered(
+			ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+		if (viewport_hovered && (io.KeyCtrl || io.KeySuper) && io.MouseWheel != 0.0f)
+		{
+			viewport_zoom = std::clamp(
+				viewport_zoom * (io.MouseWheel > 0.0f ? 1.1f : 1.0f / 1.1f),
+				0.1f,
+				8.0f);
+		}
+
+		ImGui::SetNextItemWidth(200.0f);
+		ImGui::SliderFloat("Zoom", &viewport_zoom, 0.1f, 8.0f, "%.2fx", ImGuiSliderFlags_Logarithmic);
+		viewport_zoom = std::clamp(viewport_zoom, 0.1f, 8.0f);
+		ImGui::SameLine();
+		if (ImGui::Button("100%"))
+			viewport_zoom = 1.0f;
+		ImGui::SameLine();
+		ImGui::TextDisabled("Ctrl/Cmd + wheel");
+		ImGui::Separator();
 
 		current_viewport_size = ImGui::GetContentRegionAvail();
 		ImDrawList *draw_list = ImGui::GetWindowDrawList();
@@ -291,8 +491,11 @@ int main()
 
 		if (current_img.textureID > 0)
 		{
-			float canvas_w = ascii_art.cols * char_spacing_x;
-			float canvas_h = ascii_art.rows * char_spacing_y;
+			const float unscaled_canvas_w = ascii_art.cols * char_spacing_x;
+			const float unscaled_canvas_h = ascii_art.rows * char_spacing_y;
+			const float canvas_scale = viewport_zoom;
+			const float canvas_w = unscaled_canvas_w * canvas_scale;
+			const float canvas_h = unscaled_canvas_h * canvas_scale;
 
 			if (show_base_layer)
 			{
@@ -338,16 +541,16 @@ int main()
 						continue;
 					}
 
-					float offset_x = (glitch_intensity > 0.0f) ? jitter_dist(main_rng) : 0.0f;
-					float offset_y = (glitch_intensity > 0.0f) ? jitter_dist(main_rng) : 0.0f;
+					float offset_x = (glitch_intensity > 0.0f) ? jitter_dist(main_rng) * canvas_scale : 0.0f;
+					float offset_y = (glitch_intensity > 0.0f) ? jitter_dist(main_rng) * canvas_scale : 0.0f;
 
 					ImVec2 char_pos(
-						canvas_pos.x + (col * char_spacing_x) + offset_x,
-						canvas_pos.y + (row * char_spacing_y) + offset_y);
+						canvas_pos.x + (col * char_spacing_x * canvas_scale) + offset_x,
+						canvas_pos.y + (row * char_spacing_y * canvas_scale) + offset_y);
 
 					char buf[5] = {0};
 					ImTextCharToUtf8(buf, codepoint);
-					draw_list->AddText(fonts.ascii_font, ascii_font_size, char_pos, txt_col, buf);
+					draw_list->AddText(fonts.ascii_font, ascii_font_size * canvas_scale, char_pos, txt_col, buf);
 
 					col++;
 				}
@@ -363,18 +566,12 @@ int main()
 
 		ImGui::Render();
 
-		int display_w, display_h;
-		glfwGetFramebufferSize(window, &display_w, &display_h);
-		glViewport(0, 0, display_w, display_h);
-		glClearColor(0.12f, 0.12f, 0.14f, 1.0f);
-		glClear(GL_COLOR_BUFFER_BIT);
+		present_imgui_frame(window);
 
-		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-		if (pending_export)
+		if (pending_image_export)
 		{
-			export_to_image(
-				export_file_path,
+			if (!export_to_image(
+				image_export_path,
 				ascii_art,
 				fonts.ascii_font,
 				ascii_font_size,
@@ -384,8 +581,17 @@ int main()
 				text_color,
 				glitch_intensity,
 				export_full_canvas,
-				current_viewport_size);
-			pending_export = false;
+				current_viewport_size))
+			{
+				std::cerr << "Failed to export image: " << image_export_path << '\n';
+			}
+			pending_image_export = false;
+		}
+		if (pending_text_export)
+		{
+			if (!export_to_text(text_export_path, ascii_art))
+				std::cerr << "Failed to export text: " << text_export_path << '\n';
+			pending_text_export = false;
 		}
 		if (pending_font_rebuild)
 		{
@@ -393,7 +599,6 @@ int main()
 			pending_font_rebuild = false;
 		}
 
-		glfwSwapBuffers(window);
 	}
 
 	destroy_image_buffer(current_img);

@@ -1,5 +1,7 @@
 CXX      := clang++
-CXXFLAGS := -std=c++20 -O3 -Wall -Wextra -Wno-deprecated-declarations -Wno-missing-field-initializers -Wno-deprecated
+CXXFLAGS := -std=c++20 -O3 -Wall -Wextra \
+	-Wno-deprecated-declarations -Wno-missing-field-initializers \
+	-Wno-deprecated
 
 ARCH_FLAGS := -arch arm64
 
@@ -44,7 +46,7 @@ OBJC_OBJS := $(patsubst %.mm,$(OBJ_DIR)/%.o,$(APP_OBJC_SRCS))
 C_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(GLAD_SRCS))
 OBJS := $(CPP_OBJS) $(OBJC_OBJS) $(C_OBJS)
 
-TARGET := ascii_studio
+TARGET := image_character
 
 .PHONY: all clean fclean re
 

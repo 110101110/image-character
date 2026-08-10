@@ -10,9 +10,9 @@ namespace AsciiArt
 {
 	namespace Config
 	{
-		inline constexpr int window_width = 1400;
-		inline constexpr int window_height = 850;
-		inline constexpr int sidebar_width = 360;
+		inline constexpr int window_width = 1600;
+		inline constexpr int window_height = 900;
+		inline constexpr float sidebar_width = 460.0f;
 		inline constexpr const char *window_title = "ASCII Art";
 		inline constexpr const char *glsl_version = "#version 410";
 
@@ -55,6 +55,12 @@ namespace AsciiArt
 		ImFont *ascii_font = nullptr;
 	};
 
+	struct SymbolGroup
+	{
+		const char *name;
+		const char *symbols;
+	};
+
 	inline constexpr BuiltinFont builtin_ascii_fonts[] = {
 		{"Menlo", "/System/Library/Fonts/Menlo.ttc"},
 		{"Monaco", "/System/Library/Fonts/Monaco.ttf"},
@@ -67,19 +73,45 @@ namespace AsciiArt
 	inline constexpr const char *interface_font_path =
 		"/System/Library/Fonts/Supplemental/Courier New.ttf";
 	inline constexpr float interface_font_size = 14.0f;
+	inline constexpr const char *cjk_fallback_font_path = "/System/Library/Fonts/PingFang.ttc";
+	inline constexpr const char *symbol_fallback_font_path = "/System/Library/Fonts/Apple Symbols.ttf";
+	inline constexpr const char *dingbat_fallback_font_path = "/System/Library/Fonts/ZapfDingbats.ttf";
 
-	inline constexpr ImWchar interface_glyph_ranges[] = {
+	inline constexpr ImWchar base_glyph_ranges[] = {
 		0x0020, 0x00FF,
+		0x2500, 0x259F,
 		0};
 
-	inline constexpr ImWchar ascii_glyph_ranges[] = {
-		0x0020, 0x00FF, // Basic Latin and Latin Supplement
-		0x2500, 0x257F, // Box Drawing
-		0x2580, 0x259F, // Block Elements
+	inline constexpr ImWchar cjk_glyph_ranges[] = {
+		0x3000, 0x30FF, // CJK punctuation, Hiragana and Katakana
+		0x3400, 0x4DBF, // CJK Unified Ideographs Extension A
+		0x4E00, 0x9FFF, // CJK Unified Ideographs
+		0xFF00, 0xFFEF, // Half-width and full-width forms
 		0};
+
+	inline constexpr ImWchar symbol_glyph_ranges[] = {
+		0x2600, 0x26FF,
+		0x2800, 0x28FF,
+		0};
+
+	inline constexpr ImWchar dingbat_glyph_ranges[] = {
+		0x2700, 0x27BF,
+		0};
+
+	inline constexpr SymbolGroup special_symbol_groups[] = {
+		{"Stars", "✧✦✩✪✫✬✭✮✯✰"},
+		{"Flowers", "✿❀❁❂❃❉❊❋"},
+		{"Katakana", "アカサタナハマヤラワ"},
+		{"Braille", "⠁⠂⠄⡀⢀⠐⠠⡁⡂⡄⡈⡐⡠"},
+		{"Blocks", "█▓▒░"}};
+
+	inline constexpr std::size_t special_symbol_group_count =
+		sizeof(special_symbol_groups) / sizeof(special_symbol_groups[0]);
 
 	AsciiOutput generate_ascii(const ImageBuffer &image, int target_columns, int target_rows,
 		float brightness, float contrast, bool invert, const std::string &ramp);
+
+	std::string reverse_utf8(const std::string &text);
 
 	int calculate_locked_rows(
 		const ImageBuffer &image,
@@ -125,5 +157,7 @@ namespace AsciiArt
 		ImVec2 viewport_size,
 		float export_scale = Config::default_export_scale);
 
-	bool export_to_text();
+	bool export_to_text(
+		const std::string &filepath,
+		const AsciiOutput &ascii);
 }

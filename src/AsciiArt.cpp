@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string_view>
+#include <vector>
 
+#include "imgui_internal.h"
 #include "stb_image.h"
 
 namespace AsciiArt
@@ -16,6 +19,23 @@ namespace AsciiArt
 		{
 			return output;
 		}
+
+		std::vector<std::string_view> ramp_characters;
+		const char *ramp_cursor = ramp.data();
+		const char *ramp_end = ramp_cursor + ramp.size();
+		while (ramp_cursor < ramp_end)
+		{
+			unsigned int codepoint = 0;
+			const int byte_count = ImTextCharFromUtf8(&codepoint, ramp_cursor, ramp_end);
+			if (byte_count <= 0)
+				break;
+
+			ramp_characters.emplace_back(ramp_cursor, static_cast<std::size_t>(byte_count));
+			ramp_cursor += byte_count;
+		}
+
+		if (ramp_characters.empty())
+			return output;
 
 		output.cols = target_columns;
 		output.rows = target_rows;
@@ -60,9 +80,9 @@ namespace AsciiArt
 				average_luminance = (average_luminance - 128.0f) * contrast + 128.0f + brightness;
 				average_luminance = std::clamp(average_luminance, 0.0f, 255.0f);
 
-				const int ramp_index = static_cast<int>(
-					(average_luminance / 255.0f) * static_cast<float>(ramp.size() - 1));
-				output.text += ramp[ramp_index];
+				const std::size_t ramp_index = static_cast<std::size_t>(
+					(average_luminance / 255.0f) * static_cast<float>(ramp_characters.size() - 1));
+				output.text.append(ramp_characters[ramp_index]);
 			}
 			output.text += '\n';
 		}
@@ -70,11 +90,32 @@ namespace AsciiArt
 		return output;
 	}
 
-	int calculate_locked_rows(
-		const ImageBuffer &image,
-		int columns,
-		float spacing_x,
-		float spacing_y)
+	std::string reverse_utf8(const std::string &text)
+	{
+		std::vector<std::string_view> characters;
+		const char *cursor = text.data();
+		const char *end = cursor + text.size();
+
+		while (cursor < end)
+		{
+			unsigned int codepoint = 0;
+			int byte_count = ImTextCharFromUtf8(&codepoint, cursor, end);
+			if (byte_count <= 0)
+				byte_count = 1;
+
+			characters.emplace_back(cursor, static_cast<std::size_t>(byte_count));
+			cursor += byte_count;
+		}
+
+		std::string reversed;
+		reversed.reserve(text.size());
+		for (auto character = characters.rbegin(); character != characters.rend(); ++character)
+			reversed.append(character->data(), character->size());
+
+		return reversed;
+	}
+
+	int calculate_locked_rows(const ImageBuffer &image, int columns, float spacing_x, float spacing_y)
 	{
 		if (image.width <= 0 || image.height <= 0 || columns <= 0 ||
 			spacing_x <= 0.0f || spacing_y <= 0.0f)
@@ -88,11 +129,7 @@ namespace AsciiArt
 		return std::max(1, static_cast<int>(std::lround(rows)));
 	}
 
-	int calculate_locked_columns(
-		const ImageBuffer &image,
-		int rows,
-		float spacing_x,
-		float spacing_y)
+	int calculate_locked_columns(const ImageBuffer &image, int rows, float spacing_x, float spacing_y)
 	{
 		if (image.width <= 0 || image.height <= 0 || rows <= 0 ||
 			spacing_x <= 0.0f || spacing_y <= 0.0f)
@@ -106,11 +143,7 @@ namespace AsciiArt
 		return std::max(1, static_cast<int>(std::lround(columns)));
 	}
 
-	float calculate_locked_spacing_y(
-		const ImageBuffer &image,
-		int columns,
-		int rows,
-		float spacing_x)
+	float calculate_locked_spacing_y(const ImageBuffer &image, int columns, int rows, float spacing_x)
 	{
 		if (image.width <= 0 || image.height <= 0 || columns <= 0 || rows <= 0 || spacing_x <= 0.0f)
 			return spacing_x;
@@ -119,11 +152,7 @@ namespace AsciiArt
 			(rows * static_cast<float>(image.width));
 	}
 
-	float calculate_locked_spacing_x(
-		const ImageBuffer &image,
-		int columns,
-		int rows,
-		float spacing_y)
+	float calculate_locked_spacing_x(const ImageBuffer &image, int columns, int rows, float spacing_y)
 	{
 		if (image.width <= 0 || image.height <= 0 || columns <= 0 || rows <= 0 || spacing_y <= 0.0f)
 			return spacing_y;

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <random>
 #include <vector>
 
@@ -181,8 +182,18 @@ namespace AsciiArt
 			filepath.c_str(), export_width, export_height, 4, pixels.data(), export_width * 4) != 0;
 	}
 
-	bool export_to_text()
+	bool export_to_text(
+		const std::string &filepath,
+		const AsciiOutput &ascii)
 	{
-		return false;
+		if (filepath.empty() || ascii.text.empty() || ascii.cols <= 0 || ascii.rows <= 0)
+			return false;
+
+		std::ofstream output(filepath, std::ios::binary | std::ios::trunc);
+		if (!output)
+			return false;
+
+		output.write(ascii.text.data(), static_cast<std::streamsize>(ascii.text.size()));
+		return output.good();
 	}
 }
