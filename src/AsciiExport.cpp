@@ -13,7 +13,8 @@ namespace AsciiArt
 {
 	bool export_to_image(const std::string &filepath, const AsciiOutput &ascii, ImFont *ascii_font,
 		float ascii_font_size, float spacing_x, float spacing_y, ImVec4 background_color, ImVec4 text_color,
-		float glitch_intensity, bool export_full_canvas, ImVec2 viewport_size, float export_scale)
+		const ImageBuffer *base_image, float base_opacity, float glitch_intensity,
+		bool export_full_canvas, ImVec2 viewport_size, float export_scale)
 	{
 		if (filepath.empty() || ascii.text.empty() || ascii.cols <= 0 || ascii.rows <= 0 ||
 			!ascii_font || ascii_font_size <= 0.0f || export_scale <= 0.0f)
@@ -50,6 +51,51 @@ namespace AsciiArt
 			pixels[index * 4 + 1] = background_green;
 			pixels[index * 4 + 2] = background_blue;
 			pixels[index * 4 + 3] = background_alpha;
+		}
+
+		if (base_image && base_image->pixels && base_image->width > 0 && base_image->height > 0)
+		{
+			const int base_draw_width = std::min(
+				export_width,
+				std::max(1, static_cast<int>(std::ceil(ascii.cols * spacing_x * export_scale))));
+			const int base_draw_height = std::min(
+				export_height,
+				std::max(1, static_cast<int>(std::ceil(ascii.rows * spacing_y * export_scale))));
+			const float opacity = std::clamp(base_opacity, 0.0f, 1.0f);
+
+			for (int destination_y = 0; destination_y < base_draw_height; ++destination_y)
+			{
+				const int source_y = std::min(
+					base_image->height - 1,
+					destination_y * base_image->height / base_draw_height);
+				for (int destination_x = 0; destination_x < base_draw_width; ++destination_x)
+				{
+					const int source_x = std::min(
+						base_image->width - 1,
+						destination_x * base_image->width / base_draw_width);
+					const int source_index = (source_y * base_image->width + source_x) * 4;
+					const int destination_index = (destination_y * export_width + destination_x) * 4;
+					const float source_alpha =
+						(base_image->pixels[source_index + 3] / 255.0f) * opacity;
+					const float destination_alpha = pixels[destination_index + 3] / 255.0f;
+					const float output_alpha = source_alpha + destination_alpha * (1.0f - source_alpha);
+					if (output_alpha <= 0.0f)
+						continue;
+
+					const float remaining_alpha = destination_alpha * (1.0f - source_alpha);
+					for (int channel = 0; channel < 3; ++channel)
+					{
+						const float source_color = base_image->pixels[source_index + channel] / 255.0f;
+						const float destination_color = pixels[destination_index + channel] / 255.0f;
+						const float output_color =
+							(source_color * source_alpha + destination_color * remaining_alpha) / output_alpha;
+						pixels[destination_index + channel] = static_cast<unsigned char>(
+							std::clamp(output_color * 255.0f, 0.0f, 255.0f));
+					}
+					pixels[destination_index + 3] = static_cast<unsigned char>(
+						std::clamp(output_alpha * 255.0f, 0.0f, 255.0f));
+				}
+			}
 		}
 
 		ImFontBaked *baked_font = ascii_font->GetFontBaked(ascii_font_size);
@@ -182,9 +228,7 @@ namespace AsciiArt
 			filepath.c_str(), export_width, export_height, 4, pixels.data(), export_width * 4) != 0;
 	}
 
-	bool export_to_text(
-		const std::string &filepath,
-		const AsciiOutput &ascii)
+	bool export_to_text(const std::string &filepath, const AsciiOutput &ascii)
 	{
 		if (filepath.empty() || ascii.text.empty() || ascii.cols <= 0 || ascii.rows <= 0)
 			return false;

@@ -152,6 +152,8 @@ namespace AsciiArt
 		float spacing_y,
 		ImVec4 background_color,
 		ImVec4 text_color,
+		const ImageBuffer *base_image,
+		float base_opacity,
 		float glitch_intensity,
 		bool export_full_canvas,
 		ImVec2 viewport_size,

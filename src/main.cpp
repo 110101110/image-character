@@ -5,6 +5,7 @@
 #include <string>
 #include <algorithm>
 #include <random>
+#include <vector>
 
 #include <glad/glad.h>
 
@@ -28,6 +29,100 @@ struct RampEditorState
 	std::size_t cursor_byte = 0;
 };
 
+struct AsciiEditorState
+{
+	bool enabled = false;
+	bool modified = false;
+	bool soft_wrap = true;
+	float width = 800.0f;
+	std::vector<char> buffer = std::vector<char>(1024 * 1024, '\0');
+};
+
+static void set_editor_text(AsciiEditorState &editor, const std::string &text)
+{
+	const std::size_t copy_size = std::min(text.size(), editor.buffer.size() - 1);
+	std::memcpy(editor.buffer.data(), text.data(), copy_size);
+	editor.buffer[copy_size] = '\0';
+}
+
+static AsciiOutput layout_edited_ascii(const char *text, bool soft_wrap, int wrap_columns)
+{
+	AsciiOutput output;
+	if (!text || *text == '\0')
+		return output;
+
+	wrap_columns = std::max(1, wrap_columns);
+	const char *cursor = text;
+	const char *end = text + std::strlen(text);
+	int column = 0;
+	int maximum_columns = 0;
+	int rows = 1;
+
+	while (cursor < end)
+	{
+		unsigned int codepoint = 0;
+		const int byte_count = ImTextCharFromUtf8(&codepoint, cursor, end);
+		if (byte_count <= 0)
+			break;
+
+		if (codepoint == '\n')
+		{
+			output.text.push_back('\n');
+			maximum_columns = std::max(maximum_columns, column);
+			column = 0;
+			if (cursor + byte_count < end)
+				++rows;
+			cursor += byte_count;
+			continue;
+		}
+
+		if (soft_wrap && column >= wrap_columns)
+		{
+			output.text.push_back('\n');
+			maximum_columns = std::max(maximum_columns, column);
+			column = 0;
+			++rows;
+		}
+
+		output.text.append(cursor, static_cast<std::size_t>(byte_count));
+		cursor += byte_count;
+		++column;
+	}
+
+	output.cols = std::max(maximum_columns, column);
+	output.rows = rows;
+	return output;
+}
+
+static int longest_utf8_line(const char *text)
+{
+	if (!text)
+		return 0;
+
+	const char *cursor = text;
+	const char *end = text + std::strlen(text);
+	int current_columns = 0;
+	int maximum_columns = 0;
+	while (cursor < end)
+	{
+		unsigned int codepoint = 0;
+		const int byte_count = ImTextCharFromUtf8(&codepoint, cursor, end);
+		if (byte_count <= 0)
+			break;
+		cursor += byte_count;
+		if (codepoint == '\n')
+		{
+			maximum_columns = std::max(maximum_columns, current_columns);
+			current_columns = 0;
+		}
+		else if (codepoint != '\r')
+		{
+			++current_columns;
+		}
+	}
+	return std::max(maximum_columns, current_columns);
+}
+
 static int capture_ramp_cursor(ImGuiInputTextCallbackData *data)
 {
 	auto *state = static_cast<RampEditorState *>(data->UserData);
@@ -35,12 +130,7 @@ static int capture_ramp_cursor(ImGuiInputTextCallbackData *data)
 	return 0;
 }
 
-static bool insert_utf8_at_cursor(
-	char *buffer,
-	std::size_t capacity,
-	std::size_t &cursor_byte,
-	const char *character,
-	std::size_t character_size)
+static bool insert_utf8_at_cursor(char *buffer, std::size_t capacity, std::size_t &cursor_byte, const char *character, std::size_t character_size)
 {
 	const std::size_t current_size = std::strlen(buffer);
 	cursor_byte = std::min(cursor_byte, current_size);
@@ -110,12 +200,7 @@ int main()
 	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 	glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
-	GLFWwindow *window = glfwCreateWindow(
-		Config::window_width,
-		Config::window_height,
-		Config::window_title,
-		nullptr,
-		nullptr);
+	GLFWwindow *window = glfwCreateWindow(Config::window_width, Config::window_height, Config::window_title, nullptr, nullptr);
 	if (!window)
 	{
 		glfwTerminate();
@@ -134,6 +219,7 @@ int main()
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGuiIO &io = ImGui::GetIO();
+	io.ConfigWindowsResizeFromEdges = true;
 	ImGui::StyleColorsLight();
 
 	ImGui_ImplGlfw_InitForOpenGL(window, true);
@@ -175,8 +261,12 @@ int main()
 	bool glitch_per_frame = false;
 
 	bool export_full_canvas = false;
+	bool export_base_image = false;
 	ImVec2 current_viewport_size = ImVec2(0, 0); // Stores live Viewport dimensions
 	float viewport_zoom = 1.0f;
+	AsciiEditorState text_editor;
+	float preferred_editor_height = 300.0f;
+	bool control_panel_collapsed = false;
 
 	bool pending_image_export = false;
 	std::string image_export_path;
@@ -189,25 +279,31 @@ int main()
 	{
 		glfwPollEvents();
 
-		if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-		{
-			glfwSetWindowShouldClose(window, true);
-		}
+		if (glfwGetKey(window, GLFW_KEY_LEFT_SUPER) == GLFW_PRESS && glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+			glfwSetWindowShouldClose(window, GLFW_TRUE);
 
 		ImGui_ImplOpenGL3_NewFrame();
 		ImGui_ImplGlfw_NewFrame();
 		ImGui::NewFrame();
 
+		const float control_panel_width = control_panel_collapsed ? 36.0f : Config::sidebar_width;
 		ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
-		ImGui::SetNextWindowSize(ImVec2(Config::sidebar_width, io.DisplaySize.y), ImGuiCond_Always);
-		ImGui::Begin(
-			"Matrix Controls",
-			nullptr,
-			ImGuiWindowFlags_NoResize |
-				ImGuiWindowFlags_NoMove |
-				ImGuiWindowFlags_NoCollapse |
-				ImGuiWindowFlags_NoSavedSettings |
-				ImGuiWindowFlags_NoScrollbar);
+		ImGui::SetNextWindowSize(ImVec2(control_panel_width, io.DisplaySize.y), ImGuiCond_Always);
+		ImGui::Begin("Matrix Controls", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+				ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+
+		if (control_panel_collapsed)
+		{
+			if (ImGui::Button(">", ImVec2(-1.0f, 30.0f)))
+				control_panel_collapsed = false;
+		}
+		else
+		{
+			ImGui::TextUnformatted("Matrix Controls");
+			ImGui::SameLine();
+			if (ImGui::Button("<<"))
+				control_panel_collapsed = true;
+			ImGui::Separator();
 
 		ImGui::Text("1. Reference Image");
 		if (ImGui::Button("Open File ...", ImVec2(-1, 30)))
@@ -229,29 +325,18 @@ int main()
 					current_img.textureID = create_texture_from_pixels(data, w, h, 4);
 
 					target_columns = 80;
-					target_rows = calculate_locked_rows(
-						current_img,
-						target_columns,
-						char_spacing_x,
-						char_spacing_y);
+					target_rows = calculate_locked_rows(current_img, target_columns, char_spacing_x, char_spacing_y);
 
 					ascii_art = generate_ascii(current_img, target_columns, target_rows, brightness, contrast, invert_image, ramp_buffer.data());
 				}
 			}
-		}
-		if (!current_file_path.empty())
-		{
-			ImGui::TextWrapped("File: %s", current_file_path.c_str());
 		}
 
 		ImGui::Separator();
 		ImGui::Text("2. Image Grid & Ratio Controls");
 		const bool aspect_lock_changed = ImGui::Checkbox("Lock Aspect Ratio", &lock_aspect);
 		if (aspect_lock_changed && lock_aspect && current_img.pixels)
-		{
-			char_spacing_y = calculate_locked_spacing_y(
-				current_img, target_columns, target_rows, char_spacing_x);
-		}
+			char_spacing_y = calculate_locked_spacing_y(current_img, target_columns, target_rows, char_spacing_x);
 		ImGui::Text("Grid Resolution: %d x %d", ascii_art.cols, ascii_art.rows);
 
 		bool grid_changed = false;
@@ -259,30 +344,16 @@ int main()
 		{
 			grid_changed = true;
 			if (lock_aspect && current_img.height > 0 && current_img.width > 0)
-			{
-				target_rows = calculate_locked_rows(
-					current_img,
-					target_columns,
-					char_spacing_x,
-					char_spacing_y);
-			}
+				target_rows = calculate_locked_rows(current_img, target_columns, char_spacing_x, char_spacing_y);
 		}
 		if (ImGui::DragInt("Rows (Y)", &target_rows, 1, 10, 500))
 		{
 			grid_changed = true;
 			if (lock_aspect && current_img.height > 0 && current_img.width > 0)
-			{
-				target_columns = calculate_locked_columns(
-					current_img,
-					target_rows,
-					char_spacing_x,
-					char_spacing_y);
-			}
+				target_columns = calculate_locked_columns(current_img, target_rows, char_spacing_x, char_spacing_y);
 		}
 		if (grid_changed && current_img.pixels)
-		{
 			ascii_art = generate_ascii(current_img, target_columns, target_rows, brightness, contrast, invert_image, ramp_buffer.data());
-		}
 
 		ImGui::Separator();
 		ImGui::Text("3. Image Processing");
@@ -293,13 +364,14 @@ int main()
 
 		ImGui::Separator();
 		ImGui::Text("4. Ramp Characters");
-		if (ImGui::InputText(
-			"Ramp",
-			ramp_buffer.data(),
-			ramp_buffer.size(),
-			ImGuiInputTextFlags_CallbackAlways,
-			capture_ramp_cursor,
-			&ramp_editor))
+		if (ImGui::Button("Default Ramp"))
+		{
+			std::snprintf(ramp_buffer.data(), ramp_buffer.size(), "%s", Config::default_ramp);
+			ramp_editor.cursor_byte = std::strlen(ramp_buffer.data());
+			processing_changed = true;
+		}
+		if (ImGui::InputText("Ramp", ramp_buffer.data(), ramp_buffer.size(),
+			ImGuiInputTextFlags_CallbackAlways, capture_ramp_cursor, &ramp_editor))
 		{
 			processing_changed = true;
 		}
@@ -312,7 +384,11 @@ int main()
 			processing_changed = true;
 		}
 
-		if (ImGui::CollapsingHeader("Special Symbol Keyboard", ImGuiTreeNodeFlags_DefaultOpen))
+		if (ImGui::TreeNodeEx(
+			"Special Symbol Keyboard",
+			ImGuiTreeNodeFlags_DefaultOpen |
+				ImGuiTreeNodeFlags_Framed |
+				ImGuiTreeNodeFlags_SpanAvailWidth))
 		{
 			for (int group_index = 0;
 				 group_index < static_cast<int>(special_symbol_group_count);
@@ -356,6 +432,7 @@ int main()
 
 				ImGui::PopID();
 			}
+			ImGui::TreePop();
 		}
 
 		if (processing_changed)
@@ -382,9 +459,7 @@ int main()
 				}
 
 				if (selected)
-				{
 					ImGui::SetItemDefaultFocus();
-				}
 			}
 
 			ImGui::EndCombo();
@@ -392,9 +467,7 @@ int main()
 		ImGui::DragFloat(
 			"Font Size", &ascii_font_size,0.1f, Config::minimum_ascii_font_size,Config::maximum_ascii_font_size, "%.1f");
 		if (ImGui::IsItemDeactivatedAfterEdit())
-		{
 			pending_font_rebuild = true;
-		}
 		const bool spacing_x_changed = ImGui::DragFloat(
 			"Horizontal Spacing", &char_spacing_x, 0.1f, 0.1f, 100.0f, "%.1f");
 		const bool spacing_y_changed = ImGui::DragFloat(
@@ -403,19 +476,13 @@ int main()
 		if (lock_aspect && current_img.pixels)
 		{
 			if (spacing_x_changed)
-			{
-				char_spacing_y = calculate_locked_spacing_y(
-					current_img, target_columns, target_rows, char_spacing_x);
-			}
+				char_spacing_y = calculate_locked_spacing_y(current_img, target_columns, target_rows, char_spacing_x);
 			else if (spacing_y_changed)
-			{
-				char_spacing_x = calculate_locked_spacing_x(
-					current_img, target_columns, target_rows, char_spacing_y);
-			}
+				char_spacing_x = calculate_locked_spacing_x(current_img, target_columns, target_rows, char_spacing_y);
 		}
 
 		ImGui::Separator();
-		ImGui::Text("6. Glitch Mechanics");
+		ImGui::Text("6. Glitch Mechanics & Special Effects");
 		ImGui::SliderFloat("Glitch Jitter", &glitch_intensity, 0.0f, 50.0f);
 		ImGui::Checkbox("Animate Glitch", &glitch_per_frame);
 
@@ -430,6 +497,9 @@ int main()
 		ImGui::Separator();
 		ImGui::Text("8. Exports");
 		ImGui::Checkbox("Export Entire ASCII Canvas", &export_full_canvas);
+		ImGui::Checkbox("Export Base Image", &export_base_image);
+		if (export_base_image)
+			ImGui::TextDisabled("Uses Base Layer Opacity: %.0f%%", base_opacity * 100.0f);
 		if (ImGui::Button("Export Image (.PNG / .JPG)", ImVec2(-1, 30)))
 		{
 			std::string save_path = SaveNativeFileDialog("ascii_art.png");
@@ -448,42 +518,107 @@ int main()
 				pending_text_export = true;
 			}
 		}
+		}
 		ImGui::End();
 
-		// Viewport
-		const float viewport_x = Config::sidebar_width;
+		// Viewport tools
+		const float viewport_x = control_panel_width;
+		const float viewport_width = std::max(1.0f, io.DisplaySize.x - viewport_x);
+		constexpr float tools_height = 72.0f;
 		ImGui::SetNextWindowPos(ImVec2(viewport_x, 0), ImGuiCond_Always);
 		ImGui::SetNextWindowSize(
-			ImVec2(std::max(1.0f, io.DisplaySize.x - viewport_x), io.DisplaySize.y),
+			ImVec2(viewport_width, tools_height),
 			ImGuiCond_Always);
-		ImGui::Begin(
-			"Canvas Viewport",
-			nullptr,
-			ImGuiWindowFlags_NoResize |
-			ImGuiWindowFlags_NoMove |
-				ImGuiWindowFlags_NoCollapse |
-				ImGuiWindowFlags_NoSavedSettings |
-				ImGuiWindowFlags_HorizontalScrollbar);
+		ImGui::Begin("Viewport Tools",nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+				ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
 
-		const bool viewport_hovered = ImGui::IsWindowHovered(
-			ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
-		if (viewport_hovered && (io.KeyCtrl || io.KeySuper) && io.MouseWheel != 0.0f)
-		{
-			viewport_zoom = std::clamp(
-				viewport_zoom * (io.MouseWheel > 0.0f ? 1.1f : 1.0f / 1.1f),
-				0.1f,
-				8.0f);
-		}
-
-		ImGui::SetNextItemWidth(200.0f);
+		ImGui::SetNextItemWidth(140.0f);
 		ImGui::SliderFloat("Zoom", &viewport_zoom, 0.1f, 8.0f, "%.2fx", ImGuiSliderFlags_Logarithmic);
 		viewport_zoom = std::clamp(viewport_zoom, 0.1f, 8.0f);
 		ImGui::SameLine();
 		if (ImGui::Button("100%"))
 			viewport_zoom = 1.0f;
 		ImGui::SameLine();
-		ImGui::TextDisabled("Ctrl/Cmd + wheel");
-		ImGui::Separator();
+		const bool was_editing = text_editor.enabled;
+		ImGui::Checkbox("Text Editor", &text_editor.enabled);
+		if (text_editor.enabled && !was_editing && !text_editor.modified)
+			set_editor_text(text_editor, ascii_art.text);
+		ImGui::SameLine();
+		ImGui::Checkbox("Soft Wrap", &text_editor.soft_wrap);
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(110.0f);
+		ImGui::DragFloat("Editor Width", &text_editor.width, 2.0f, 120.0f, 8000.0f, "%.0f px");
+		text_editor.width = std::clamp(text_editor.width, 120.0f, 8000.0f);
+		ImGui::End();
+
+		if (text_editor.enabled && !text_editor.modified && std::strcmp(text_editor.buffer.data(), ascii_art.text.c_str()) != 0)
+			set_editor_text(text_editor, ascii_art.text);
+
+		// ASCII editor
+		ImGuiWindow *existing_canvas_window = ImGui::FindWindowByName("Canvas Viewport");
+		const bool canvas_was_collapsed = existing_canvas_window && existing_canvas_window->Collapsed;
+		const float collapsed_bar_height = ImGui::GetFrameHeight();
+		const float available_stack_height = std::max(1.0f, io.DisplaySize.y - tools_height);
+		const float maximum_editor_height = std::max(collapsed_bar_height, available_stack_height - collapsed_bar_height);
+		preferred_editor_height = std::clamp(preferred_editor_height, collapsed_bar_height, maximum_editor_height);
+		float requested_editor_height = text_editor.enabled ? preferred_editor_height : collapsed_bar_height;
+		if (text_editor.enabled && canvas_was_collapsed)
+			requested_editor_height = std::max(collapsed_bar_height, available_stack_height - collapsed_bar_height);
+
+		ImGui::SetNextWindowPos(ImVec2(viewport_x, tools_height), ImGuiCond_Always);
+		ImGui::SetNextWindowSize(ImVec2(viewport_width, requested_editor_height), ImGuiCond_Always);
+		ImGui::SetNextWindowSizeConstraints(ImVec2(viewport_width, collapsed_bar_height), ImVec2(viewport_width, maximum_editor_height));
+
+		const bool editor_expanded = ImGui::Begin("ASCII Editor", nullptr,
+			ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_HorizontalScrollbar);
+		const float editor_layout_height = ImGui::GetWindowHeight();
+
+		if (editor_expanded && text_editor.enabled && !canvas_was_collapsed)
+			preferred_editor_height = editor_layout_height;
+
+		if (editor_expanded && text_editor.enabled)
+		{
+			if (ImGui::Button("Reset from Generated"))
+			{
+				set_editor_text(text_editor, ascii_art.text);
+				text_editor.modified = false;
+			}
+			ImGui::SameLine();
+			ImGui::TextDisabled("Edits are preserved until Reset from Generated is pressed.");
+
+			const float editor_content_width = std::max(text_editor.width, longest_utf8_line(text_editor.buffer.data()) * char_spacing_x * viewport_zoom);
+			const float editor_footer_height = ImGui::GetTextLineHeightWithSpacing();
+			const float input_height = std::max(1.0f, ImGui::GetContentRegionAvail().y - editor_footer_height);
+			ImGui::PushFont(fonts.ascii_font, ascii_font_size * viewport_zoom);
+
+			const bool editor_changed = ImGui::InputTextMultiline("##AsciiTextEditor", text_editor.buffer.data(), text_editor.buffer.size(),
+				ImVec2(std::max(120.0f, editor_content_width), input_height), ImGuiInputTextFlags_AllowTabInput);
+
+			ImGui::PopFont();
+			if (editor_changed)
+				text_editor.modified = true;
+		}
+		ImGui::End();
+
+		const int editor_wrap_columns = std::max(1, static_cast<int>(text_editor.width / std::max(0.1f, char_spacing_x * viewport_zoom)));
+		const AsciiOutput displayed_ascii = text_editor.enabled ? layout_edited_ascii(text_editor.buffer.data(), text_editor.soft_wrap, editor_wrap_columns) : ascii_art;
+
+		// Canvas viewport
+		const float canvas_y = canvas_was_collapsed
+			? std::max(tools_height, io.DisplaySize.y - collapsed_bar_height)
+			: tools_height + editor_layout_height;
+		ImGui::SetNextWindowPos(ImVec2(viewport_x, canvas_y), ImGuiCond_Always);
+		ImGui::SetNextWindowSize(
+			ImVec2(viewport_width, std::max(1.0f, io.DisplaySize.y - canvas_y)),
+			ImGuiCond_Always);
+		const bool canvas_expanded = ImGui::Begin("Canvas Viewport", nullptr,
+			ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_HorizontalScrollbar);
+
+		if (canvas_expanded)
+		{
+			const bool viewport_hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+			if (viewport_hovered && (io.KeyCtrl || io.KeySuper) && io.MouseWheel != 0.0f)
+				viewport_zoom = std::clamp(viewport_zoom * (io.MouseWheel > 0.0f ? 1.1f : 1.0f / 1.1f), 0.1f, 8.0f);
 
 		current_viewport_size = ImGui::GetContentRegionAvail();
 		ImDrawList *draw_list = ImGui::GetWindowDrawList();
@@ -491,49 +626,43 @@ int main()
 
 		if (current_img.textureID > 0)
 		{
-			const float unscaled_canvas_w = ascii_art.cols * char_spacing_x;
-			const float unscaled_canvas_h = ascii_art.rows * char_spacing_y;
+			const float unscaled_text_width = displayed_ascii.cols * char_spacing_x;
+			const float unscaled_text_height = displayed_ascii.rows * char_spacing_y;
+			const float unscaled_base_width = ascii_art.cols * char_spacing_x;
+			const float unscaled_base_height = ascii_art.rows * char_spacing_y;
 			const float canvas_scale = viewport_zoom;
-			const float canvas_w = unscaled_canvas_w * canvas_scale;
-			const float canvas_h = unscaled_canvas_h * canvas_scale;
+			const float canvas_w = std::max(unscaled_text_width, unscaled_base_width) * canvas_scale;
+			const float canvas_h = std::max(unscaled_text_height, unscaled_base_height) * canvas_scale;
 
 			if (show_base_layer)
 			{
 				ImU32 tint = ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 1.0f, 1.0f, base_opacity));
-				draw_list->AddImage(
-					(void *)(intptr_t)current_img.textureID,
-					canvas_pos,
-					ImVec2(canvas_pos.x + canvas_w, canvas_pos.y + canvas_h),
-					ImVec2(0, 0), ImVec2(1, 1),
-					tint);
+					draw_list->AddImage((void *)(intptr_t)current_img.textureID, canvas_pos,
+					ImVec2(canvas_pos.x + unscaled_base_width * canvas_scale, canvas_pos.y + unscaled_base_height * canvas_scale),
+					ImVec2(0, 0), ImVec2(1, 1),tint);
 			}
 
-			if (show_ascii_layer && !ascii_art.text.empty())
+			if (show_ascii_layer && !displayed_ascii.text.empty())
 			{
 				ImU32 txt_col = ImGui::ColorConvertFloat4ToU32(text_color);
 
 				if (!glitch_per_frame)
-				{
 					main_rng.seed(1337);
-				}
 				std::uniform_real_distribution<float> jitter_dist(-glitch_intensity, glitch_intensity);
 
 				int col = 0;
 				int row = 0;
 
-				const char *text_ptr = ascii_art.text.c_str();
-				const char *text_end = text_ptr + ascii_art.text.size();
+				const char *text_ptr = displayed_ascii.text.c_str();
+				const char *text_end = text_ptr + displayed_ascii.text.size();
 
-				//rendering loop with extended unicode
 				while (text_ptr < text_end)
 				{
 					unsigned int codepoint = 0;
 					int bytes_consumed = ImTextCharFromUtf8(&codepoint, text_ptr, text_end);
 					if (bytes_consumed <= 0)
 						break;
-
 					text_ptr += bytes_consumed;
-
 					if (codepoint == '\n')
 					{
 						row++;
@@ -555,11 +684,9 @@ int main()
 					col++;
 				}
 			}
-
 			ImGui::Dummy(ImVec2(canvas_w, canvas_h));
 		}
 		else
-		{
 			ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Load an image to begin tuning aspect ratios and spacing.");
 		}
 		ImGui::End();
@@ -572,13 +699,15 @@ int main()
 		{
 			if (!export_to_image(
 				image_export_path,
-				ascii_art,
+				displayed_ascii,
 				fonts.ascii_font,
 				ascii_font_size,
 				char_spacing_x,
 				char_spacing_y,
 				bg_color,
 				text_color,
+				export_base_image ? &current_img : nullptr,
+				base_opacity,
 				glitch_intensity,
 				export_full_canvas,
 				current_viewport_size))
@@ -589,7 +718,7 @@ int main()
 		}
 		if (pending_text_export)
 		{
-			if (!export_to_text(text_export_path, ascii_art))
+			if (!export_to_text(text_export_path, displayed_ascii))
 				std::cerr << "Failed to export text: " << text_export_path << '\n';
 			pending_text_export = false;
 		}
