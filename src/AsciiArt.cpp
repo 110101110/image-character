@@ -11,7 +11,8 @@
 namespace AsciiArt
 {
 	AsciiOutput generate_ascii(const ImageBuffer &image, int target_columns, int target_rows,
-		float brightness, float contrast, bool invert, const std::string &ramp)
+		float brightness, float contrast, float grayscale,
+		bool invert, const std::string &ramp)
 	{
 		AsciiOutput output;
 		if (!image.pixels || image.width <= 0 || image.height <= 0 ||
@@ -43,6 +44,7 @@ namespace AsciiArt
 
 		const float cell_width = static_cast<float>(image.width) / target_columns;
 		const float cell_height = static_cast<float>(image.height) / target_rows;
+		const float grayscale_mix = std::clamp(grayscale, 0.0f, 1.0f);
 
 		for (int row = 0; row < target_rows; ++row)
 		{
@@ -65,7 +67,11 @@ namespace AsciiArt
 						const float green = image.pixels[index + 1];
 						const float blue = image.pixels[index + 2];
 
-						float luminance = 0.2126f * red + 0.7152f * green + 0.0722f * blue;
+					const float average_grayscale = (red + green + blue) / 3.0f;
+					const float perceptual_luminance =
+						0.2126f * red + 0.7152f * green + 0.0722f * blue;
+					float luminance = std::lerp(
+						average_grayscale, perceptual_luminance, grayscale_mix);
 						if (invert)
 							luminance = 255.0f - luminance;
 

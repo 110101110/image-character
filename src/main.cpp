@@ -248,6 +248,7 @@ int main()
 	// Tuning
 	float brightness = 0.0f;
 	float contrast = 1.0f;
+	float grayscale = 1.0f;
 	bool invert_image = false;
 	float base_opacity = 0.4f;
 	bool show_base_layer = true;
@@ -327,7 +328,9 @@ int main()
 					target_columns = 80;
 					target_rows = calculate_locked_rows(current_img, target_columns, char_spacing_x, char_spacing_y);
 
-					ascii_art = generate_ascii(current_img, target_columns, target_rows, brightness, contrast, invert_image, ramp_buffer.data());
+					ascii_art = generate_ascii(
+						current_img, target_columns, target_rows, brightness, contrast,
+						grayscale, invert_image, ramp_buffer.data());
 				}
 			}
 		}
@@ -353,7 +356,9 @@ int main()
 				target_columns = calculate_locked_columns(current_img, target_rows, char_spacing_x, char_spacing_y);
 		}
 		if (grid_changed && current_img.pixels)
-			ascii_art = generate_ascii(current_img, target_columns, target_rows, brightness, contrast, invert_image, ramp_buffer.data());
+			ascii_art = generate_ascii(
+				current_img, target_columns, target_rows, brightness, contrast,
+				grayscale, invert_image, ramp_buffer.data());
 
 		ImGui::Separator();
 		ImGui::Text("3. Image Processing");
@@ -361,6 +366,7 @@ int main()
 		processing_changed |= ImGui::Checkbox("Invert Image Colors", &invert_image);
 		processing_changed |= ImGui::SliderFloat("Brightness", &brightness, -100.0f, 100.0f);
 		processing_changed |= ImGui::SliderFloat("Contrast", &contrast, 0.1f, 3.0f);
+		processing_changed |= ImGui::SliderFloat("Grayscale", &grayscale, 0.0f, 1.0f, "%.2f");
 
 		ImGui::Separator();
 		ImGui::Text("4. Ramp Characters");
@@ -440,7 +446,8 @@ int main()
 			if (current_img.pixels)
 			{
 				ascii_art = generate_ascii(
-					current_img, target_columns, target_rows, brightness, contrast, invert_image, ramp_buffer.data());
+					current_img, target_columns, target_rows, brightness, contrast,
+					grayscale, invert_image, ramp_buffer.data());
 			}
 		}
 

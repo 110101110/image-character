@@ -109,7 +109,8 @@ namespace AsciiArt
 		sizeof(special_symbol_groups) / sizeof(special_symbol_groups[0]);
 
 	AsciiOutput generate_ascii(const ImageBuffer &image, int target_columns, int target_rows,
-		float brightness, float contrast, bool invert, const std::string &ramp);
+		float brightness, float contrast, float grayscale,
+		bool invert, const std::string &ramp);
 
 	std::string reverse_utf8(const std::string &text);
 
