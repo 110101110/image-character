@@ -43,6 +43,27 @@ namespace AsciiArt
 		int rows = 0;
 	};
 
+	enum class EdgeDetector
+	{
+		Outline,
+		Sobel
+	};
+
+	enum class EdgeStyle
+	{
+		Simple,
+		Directional
+	};
+
+	struct EdgeCharacters
+	{
+		std::string simple = "#";
+		std::string horizontal = "─";
+		std::string vertical = "│";
+		std::string rising_diagonal = "╱";
+		std::string falling_diagonal = "╲";
+	};
+
 	struct BuiltinFont
 	{
 		const char *name;
@@ -105,38 +126,30 @@ namespace AsciiArt
 		{"Braille", "⠁⠂⠄⡀⢀⠐⠠⡁⡂⡄⡈⡐⡠"},
 		{"Blocks", "█▓▒░"}};
 
-	inline constexpr std::size_t special_symbol_group_count =
-		sizeof(special_symbol_groups) / sizeof(special_symbol_groups[0]);
+	inline constexpr std::size_t special_symbol_group_count = sizeof(special_symbol_groups) / sizeof(special_symbol_groups[0]);
 
-	AsciiOutput generate_ascii(const ImageBuffer &image, int target_columns, int target_rows,
-		float brightness, float contrast, float grayscale,
-		bool invert, const std::string &ramp);
-
-	std::string reverse_utf8(const std::string &text);
-
-	int calculate_locked_rows(
+	AsciiOutput generate_ascii(
 		const ImageBuffer &image,
-		int columns,
-		float spacing_x,
-		float spacing_y);
+		int target_columns,
+		int target_rows,
+		float brightness,
+		float contrast,
+		float grayscale,
+		bool invert,
+		const std::string &ramp,
+		bool edge_detection = false,
+		EdgeDetector edge_detector = EdgeDetector::Outline,
+		EdgeStyle edge_style = EdgeStyle::Simple,
+		float edge_threshold = 128.0f,
+		const EdgeCharacters &edge_characters = EdgeCharacters{});
 
-	int calculate_locked_columns(
-		const ImageBuffer &image,
-		int rows,
-		float spacing_x,
-		float spacing_y);
+	int calculate_locked_rows(const ImageBuffer &image, int columns, float spacing_x, float spacing_y);
 
-	float calculate_locked_spacing_y(
-		const ImageBuffer &image,
-		int columns,
-		int rows,
-		float spacing_x);
+	int calculate_locked_columns(const ImageBuffer &image, int rows, float spacing_x, float spacing_y);
 
-	float calculate_locked_spacing_x(
-		const ImageBuffer &image,
-		int columns,
-		int rows,
-		float spacing_y);
+	float calculate_locked_spacing_y(const ImageBuffer &image, int columns, int rows, float spacing_x);
+
+	float calculate_locked_spacing_x(const ImageBuffer &image, int columns, int rows, float spacing_y);
 
 	GLuint create_texture_from_pixels(const unsigned char *pixels, int width, int height, int channels);
 
@@ -153,14 +166,12 @@ namespace AsciiArt
 		float spacing_y,
 		ImVec4 background_color,
 		ImVec4 text_color,
-		const ImageBuffer *base_image,
-		float base_opacity,
 		float glitch_intensity,
 		bool export_full_canvas,
 		ImVec2 viewport_size,
+		float viewport_zoom,
+		ImVec2 viewport_scroll,
 		float export_scale = Config::default_export_scale);
 
-	bool export_to_text(
-		const std::string &filepath,
-		const AsciiOutput &ascii);
+	bool export_to_text(const std::string &filepath, const AsciiOutput &ascii);
 }

@@ -12,9 +12,9 @@
 namespace AsciiArt
 {
 	bool export_to_image(const std::string &filepath, const AsciiOutput &ascii, ImFont *ascii_font,
-		float ascii_font_size, float spacing_x, float spacing_y, ImVec4 background_color, ImVec4 text_color,
-		const ImageBuffer *base_image, float base_opacity, float glitch_intensity,
-		bool export_full_canvas, ImVec2 viewport_size, float export_scale)
+		float ascii_font_size, float spacing_x, float spacing_y, ImVec4 background_color, ImVec4 text_color, float glitch_intensity,
+		bool export_full_canvas, ImVec2 viewport_size, float viewport_zoom,
+		ImVec2 viewport_scroll, float export_scale)
 	{
 		if (filepath.empty() || ascii.text.empty() || ascii.cols <= 0 || ascii.rows <= 0 ||
 			!ascii_font || ascii_font_size <= 0.0f || export_scale <= 0.0f)
@@ -22,28 +22,37 @@ namespace AsciiArt
 			return false;
 		}
 
-		const float base_width = export_full_canvas ? ascii.cols * spacing_x : viewport_size.x;
-		const float base_height = export_full_canvas ? ascii.rows * spacing_y : viewport_size.y;
+		const float view_zoom = export_full_canvas ? 1.0f : std::max(0.01f, viewport_zoom);
+		const float zoomed_canvas_width = ascii.cols * spacing_x * view_zoom;
+		const float zoomed_canvas_height = ascii.rows * spacing_y * view_zoom;
+		const float visible_canvas_width = std::max(
+			0.0f, zoomed_canvas_width - (export_full_canvas ? 0.0f : viewport_scroll.x));
+		const float visible_canvas_height = std::max(
+			0.0f, zoomed_canvas_height - (export_full_canvas ? 0.0f : viewport_scroll.y));
+		const float base_width = export_full_canvas
+			? zoomed_canvas_width
+			: std::min(viewport_size.x, visible_canvas_width);
+		const float base_height = export_full_canvas
+			? zoomed_canvas_height
+			: std::min(viewport_size.y, visible_canvas_height);
 		if (base_width <= 0.0f || base_height <= 0.0f)
 			return false;
 
 		const int export_width = std::max(1, static_cast<int>(std::ceil(base_width * export_scale)));
 		const int export_height = std::max(1, static_cast<int>(std::ceil(base_height * export_scale)));
-		const float scaled_spacing_x = spacing_x * export_scale;
-		const float scaled_spacing_y = spacing_y * export_scale;
-		const float scaled_glitch = glitch_intensity * export_scale;
+		const float render_scale = export_scale * view_zoom;
+		const float origin_x = export_full_canvas ? 0.0f : -viewport_scroll.x * export_scale;
+		const float origin_y = export_full_canvas ? 0.0f : -viewport_scroll.y * export_scale;
+		const float scaled_spacing_x = spacing_x * render_scale;
+		const float scaled_spacing_y = spacing_y * render_scale;
+		const float scaled_glitch = glitch_intensity * render_scale;
 
-		std::vector<unsigned char> pixels(
-			static_cast<std::size_t>(export_width) * static_cast<std::size_t>(export_height) * 4);
+		std::vector<unsigned char> pixels(static_cast<std::size_t>(export_width) * static_cast<std::size_t>(export_height) * 4);
 
-		const unsigned char background_red = static_cast<unsigned char>(
-			std::clamp(background_color.x * 255.0f, 0.0f, 255.0f));
-		const unsigned char background_green = static_cast<unsigned char>(
-			std::clamp(background_color.y * 255.0f, 0.0f, 255.0f));
-		const unsigned char background_blue = static_cast<unsigned char>(
-			std::clamp(background_color.z * 255.0f, 0.0f, 255.0f));
-		const unsigned char background_alpha = static_cast<unsigned char>(
-			std::clamp(background_color.w * 255.0f, 0.0f, 255.0f));
+		const unsigned char background_red = static_cast<unsigned char>(std::clamp(background_color.x * 255.0f, 0.0f, 255.0f));
+		const unsigned char background_green = static_cast<unsigned char>(std::clamp(background_color.y * 255.0f, 0.0f, 255.0f));
+		const unsigned char background_blue = static_cast<unsigned char>(std::clamp(background_color.z * 255.0f, 0.0f, 255.0f));
+		const unsigned char background_alpha = static_cast<unsigned char>(std::clamp(background_color.w * 255.0f, 0.0f, 255.0f));
 
 		for (int index = 0; index < export_width * export_height; ++index)
 		{
@@ -51,51 +60,6 @@ namespace AsciiArt
 			pixels[index * 4 + 1] = background_green;
 			pixels[index * 4 + 2] = background_blue;
 			pixels[index * 4 + 3] = background_alpha;
-		}
-
-		if (base_image && base_image->pixels && base_image->width > 0 && base_image->height > 0)
-		{
-			const int base_draw_width = std::min(
-				export_width,
-				std::max(1, static_cast<int>(std::ceil(ascii.cols * spacing_x * export_scale))));
-			const int base_draw_height = std::min(
-				export_height,
-				std::max(1, static_cast<int>(std::ceil(ascii.rows * spacing_y * export_scale))));
-			const float opacity = std::clamp(base_opacity, 0.0f, 1.0f);
-
-			for (int destination_y = 0; destination_y < base_draw_height; ++destination_y)
-			{
-				const int source_y = std::min(
-					base_image->height - 1,
-					destination_y * base_image->height / base_draw_height);
-				for (int destination_x = 0; destination_x < base_draw_width; ++destination_x)
-				{
-					const int source_x = std::min(
-						base_image->width - 1,
-						destination_x * base_image->width / base_draw_width);
-					const int source_index = (source_y * base_image->width + source_x) * 4;
-					const int destination_index = (destination_y * export_width + destination_x) * 4;
-					const float source_alpha =
-						(base_image->pixels[source_index + 3] / 255.0f) * opacity;
-					const float destination_alpha = pixels[destination_index + 3] / 255.0f;
-					const float output_alpha = source_alpha + destination_alpha * (1.0f - source_alpha);
-					if (output_alpha <= 0.0f)
-						continue;
-
-					const float remaining_alpha = destination_alpha * (1.0f - source_alpha);
-					for (int channel = 0; channel < 3; ++channel)
-					{
-						const float source_color = base_image->pixels[source_index + channel] / 255.0f;
-						const float destination_color = pixels[destination_index + channel] / 255.0f;
-						const float output_color =
-							(source_color * source_alpha + destination_color * remaining_alpha) / output_alpha;
-						pixels[destination_index + channel] = static_cast<unsigned char>(
-							std::clamp(output_color * 255.0f, 0.0f, 255.0f));
-					}
-					pixels[destination_index + 3] = static_cast<unsigned char>(
-						std::clamp(output_alpha * 255.0f, 0.0f, 255.0f));
-				}
-			}
 		}
 
 		ImFontBaked *baked_font = ascii_font->GetFontBaked(ascii_font_size);
@@ -150,8 +114,8 @@ namespace AsciiArt
 			{
 				const float offset_x = scaled_glitch > 0.0f ? jitter(random_engine) : 0.0f;
 				const float offset_y = scaled_glitch > 0.0f ? jitter(random_engine) : 0.0f;
-				const float base_x = column * scaled_spacing_x + offset_x + glyph->X0 * export_scale;
-				const float base_y = row * scaled_spacing_y + offset_y + glyph->Y0 * export_scale;
+				const float base_x = origin_x + column * scaled_spacing_x + offset_x + glyph->X0 * render_scale;
+				const float base_y = origin_y + row * scaled_spacing_y + offset_y + glyph->Y0 * render_scale;
 
 				const int source_u0 = static_cast<int>(glyph->U0 * atlas_width);
 				const int source_v0 = static_cast<int>(glyph->V0 * atlas_height);
@@ -160,9 +124,9 @@ namespace AsciiArt
 				const int glyph_width = std::max(1, source_u1 - source_u0);
 				const int glyph_height = std::max(1, source_v1 - source_v0);
 				const int draw_width = std::max(
-					1, static_cast<int>(std::ceil((glyph->X1 - glyph->X0) * export_scale)));
+					1, static_cast<int>(std::ceil((glyph->X1 - glyph->X0) * render_scale)));
 				const int draw_height = std::max(
-					1, static_cast<int>(std::ceil((glyph->Y1 - glyph->Y0) * export_scale)));
+					1, static_cast<int>(std::ceil((glyph->Y1 - glyph->Y0) * render_scale)));
 
 				for (int destination_y_offset = 0; destination_y_offset < draw_height; ++destination_y_offset)
 				{
@@ -197,21 +161,15 @@ namespace AsciiArt
 						const float destination_green = pixels[destination_index + 1] / 255.0f;
 						const float destination_blue = pixels[destination_index + 2] / 255.0f;
 						const float remaining_alpha = destination_alpha * (1.0f - source_alpha);
-						const float output_red =
-							(text_color.x * source_alpha + destination_red * remaining_alpha) / output_alpha;
-						const float output_green =
-							(text_color.y * source_alpha + destination_green * remaining_alpha) / output_alpha;
-						const float output_blue =
-							(text_color.z * source_alpha + destination_blue * remaining_alpha) / output_alpha;
 
-						pixels[destination_index + 0] = static_cast<unsigned char>(
-							std::clamp(output_red * 255.0f, 0.0f, 255.0f));
-						pixels[destination_index + 1] = static_cast<unsigned char>(
-							std::clamp(output_green * 255.0f, 0.0f, 255.0f));
-						pixels[destination_index + 2] = static_cast<unsigned char>(
-							std::clamp(output_blue * 255.0f, 0.0f, 255.0f));
-						pixels[destination_index + 3] = static_cast<unsigned char>(
-							std::clamp(output_alpha * 255.0f, 0.0f, 255.0f));
+						const float output_red =(text_color.x * source_alpha + destination_red * remaining_alpha) / output_alpha;
+						const float output_green =(text_color.y * source_alpha + destination_green * remaining_alpha) / output_alpha;
+						const float output_blue =(text_color.z * source_alpha + destination_blue * remaining_alpha) / output_alpha;
+
+						pixels[destination_index + 0] = static_cast<unsigned char>(std::clamp(output_red * 255.0f, 0.0f, 255.0f));
+						pixels[destination_index + 1] = static_cast<unsigned char>(std::clamp(output_green * 255.0f, 0.0f, 255.0f));
+						pixels[destination_index + 2] = static_cast<unsigned char>(std::clamp(output_blue * 255.0f, 0.0f, 255.0f));
+						pixels[destination_index + 3] = static_cast<unsigned char>(std::clamp(output_alpha * 255.0f, 0.0f, 255.0f));
 					}
 				}
 			}

@@ -4,6 +4,8 @@
 #include <iostream>
 #include <string>
 #include <algorithm>
+#include <cstdlib>
+#include <filesystem>
 #include <random>
 #include <vector>
 
@@ -23,6 +25,7 @@
 #include "AsciiArt.h"
 
 using namespace AsciiArt;
+namespace fs = std::filesystem;
 
 struct RampEditorState
 {
@@ -123,6 +126,34 @@ static int longest_utf8_line(const char *text)
 	return std::max(maximum_columns, current_columns);
 }
 
+static fs::path create_gif_temp_directory()
+{
+	std::random_device random_device;
+	for (int attempt = 0; attempt < 32; ++attempt)
+	{
+		const fs::path candidate = fs::temp_directory_path() /
+			("ascii_signature_gif_" + std::to_string(random_device()));
+		std::error_code error;
+		if (fs::create_directory(candidate, error))
+			return candidate;
+	}
+	return {};
+}
+
+static std::string shell_quote(const fs::path &path)
+{
+	std::string quoted = "'";
+	for (char character : path.string())
+	{
+		if (character == '\'')
+			quoted += "'\\''";
+		else
+			quoted += character;
+	}
+	quoted += '\'';
+	return quoted;
+}
+
 static int capture_ramp_cursor(ImGuiInputTextCallbackData *data)
 {
 	auto *state = static_cast<RampEditorState *>(data->UserData);
@@ -189,8 +220,12 @@ static void refresh_window_during_live_resize(GLFWwindow *window)
 	present_imgui_frame(window);
 }
 
-int main()
+int main(int argc, char **argv)
 {
+	const fs::path executable_path = argc > 0
+		? fs::absolute(argv[0])
+		: fs::current_path() / "image_character";
+	const fs::path gif_script_path = executable_path.parent_path() / "make_gif.sh";
 	if (!glfwInit())
 		return -1;
 
@@ -250,6 +285,20 @@ int main()
 	float contrast = 1.0f;
 	float grayscale = 1.0f;
 	bool invert_image = false;
+	bool edge_detection = false;
+	EdgeDetector edge_detector = EdgeDetector::Outline;
+	EdgeStyle edge_style = EdgeStyle::Simple;
+	float edge_threshold = 128.0f;
+	EdgeCharacters edge_characters;
+	std::array<char, 16> simple_edge_buffer{'#', '\0'};
+	std::array<char, 16> horizontal_edge_buffer{};
+	std::array<char, 16> vertical_edge_buffer{};
+	std::array<char, 16> rising_edge_buffer{};
+	std::array<char, 16> falling_edge_buffer{};
+	std::snprintf(horizontal_edge_buffer.data(), horizontal_edge_buffer.size(), "%s", "─");
+	std::snprintf(vertical_edge_buffer.data(), vertical_edge_buffer.size(), "%s", "│");
+	std::snprintf(rising_edge_buffer.data(), rising_edge_buffer.size(), "%s", "╱");
+	std::snprintf(falling_edge_buffer.data(), falling_edge_buffer.size(), "%s", "╲");
 	float base_opacity = 0.4f;
 	bool show_base_layer = true;
 	bool show_ascii_layer = true;
@@ -262,8 +311,9 @@ int main()
 	bool glitch_per_frame = false;
 
 	bool export_full_canvas = false;
-	bool export_base_image = false;
+
 	ImVec2 current_viewport_size = ImVec2(0, 0); // Stores live Viewport dimensions
+	ImVec2 current_viewport_scroll = ImVec2(0, 0);
 	float viewport_zoom = 1.0f;
 	AsciiEditorState text_editor;
 	float preferred_editor_height = 300.0f;
@@ -273,6 +323,15 @@ int main()
 	std::string image_export_path;
 	bool pending_text_export = false;
 	std::string text_export_path;
+
+	fs::path gif_temp_directory;
+	int gif_frame_count = 0;
+	int gif_delay = 10;
+	int gif_export_area = 0; // 0 = viewport, 1 = full canvas
+	bool pending_gif_frame = false;
+	bool pending_gif_generation = false;
+	std::string gif_output_path;
+	std::string gif_status;
 
 	std::mt19937 main_rng(1337);
 
@@ -315,6 +374,7 @@ int main()
 				current_file_path = selected_path;
 				int w, h, ch;
 				unsigned char *data = stbi_load(current_file_path.c_str(), &w, &h, &ch, 4);
+				//if fails to load data, convert image file to the good format with magick (with a bash script)
 				if (data)
 				{
 					destroy_image_buffer(current_img);
@@ -329,8 +389,9 @@ int main()
 					target_rows = calculate_locked_rows(current_img, target_columns, char_spacing_x, char_spacing_y);
 
 					ascii_art = generate_ascii(
-						current_img, target_columns, target_rows, brightness, contrast,
-						grayscale, invert_image, ramp_buffer.data());
+						current_img, target_columns, target_rows, brightness, contrast, grayscale,
+						invert_image, ramp_buffer.data(), edge_detection, edge_detector,
+						edge_style, edge_threshold, edge_characters);
 				}
 			}
 		}
@@ -357,8 +418,9 @@ int main()
 		}
 		if (grid_changed && current_img.pixels)
 			ascii_art = generate_ascii(
-				current_img, target_columns, target_rows, brightness, contrast,
-				grayscale, invert_image, ramp_buffer.data());
+				current_img, target_columns, target_rows, brightness, contrast, grayscale,
+				invert_image, ramp_buffer.data(), edge_detection, edge_detector,
+				edge_style, edge_threshold, edge_characters);
 
 		ImGui::Separator();
 		ImGui::Text("3. Image Processing");
@@ -366,7 +428,63 @@ int main()
 		processing_changed |= ImGui::Checkbox("Invert Image Colors", &invert_image);
 		processing_changed |= ImGui::SliderFloat("Brightness", &brightness, -100.0f, 100.0f);
 		processing_changed |= ImGui::SliderFloat("Contrast", &contrast, 0.1f, 3.0f);
-		processing_changed |= ImGui::SliderFloat("Grayscale", &grayscale, 0.0f, 1.0f, "%.2f");
+			processing_changed |= ImGui::SliderFloat("Grayscale", &grayscale, 0.0f, 1.0f, "%.2f");
+			if (ImGui::Button(
+				edge_detection ? "Disable Edge Detection" : "Enable Edge Detection",
+				ImVec2(-1.0f, 0.0f)))
+			{
+				edge_detection = !edge_detection;
+				processing_changed = true;
+			}
+			if (edge_detection)
+			{
+				int detector_index = edge_detector == EdgeDetector::Outline ? 0 : 1;
+				const char *detectors[] = {"Threshold Outline", "Sobel Gradient"};
+				if (ImGui::Combo("Edge Detector", &detector_index, detectors, IM_ARRAYSIZE(detectors)))
+				{
+					edge_detector = detector_index == 0 ? EdgeDetector::Outline : EdgeDetector::Sobel;
+					processing_changed = true;
+				}
+
+				int style_index = edge_style == EdgeStyle::Simple ? 0 : 1;
+				const char *styles[] = {"Simple (#)", "Directional"};
+				if (ImGui::Combo("Edge Style", &style_index, styles, IM_ARRAYSIZE(styles)))
+				{
+					edge_style = style_index == 0 ? EdgeStyle::Simple : EdgeStyle::Directional;
+					processing_changed = true;
+				}
+				if (edge_style == EdgeStyle::Simple)
+				{
+					if (ImGui::InputText(
+						"Simple Edge Character", simple_edge_buffer.data(), simple_edge_buffer.size()))
+					{
+						edge_characters.simple = simple_edge_buffer.data();
+						processing_changed = true;
+					}
+				}
+				else
+				{
+					bool characters_changed = false;
+					characters_changed |= ImGui::InputText(
+						"Horizontal Edge", horizontal_edge_buffer.data(), horizontal_edge_buffer.size());
+					characters_changed |= ImGui::InputText(
+						"Vertical Edge", vertical_edge_buffer.data(), vertical_edge_buffer.size());
+					characters_changed |= ImGui::InputText(
+						"Rising Diagonal", rising_edge_buffer.data(), rising_edge_buffer.size());
+					characters_changed |= ImGui::InputText(
+						"Falling Diagonal", falling_edge_buffer.data(), falling_edge_buffer.size());
+					if (characters_changed)
+					{
+						edge_characters.horizontal = horizontal_edge_buffer.data();
+						edge_characters.vertical = vertical_edge_buffer.data();
+						edge_characters.rising_diagonal = rising_edge_buffer.data();
+						edge_characters.falling_diagonal = falling_edge_buffer.data();
+						processing_changed = true;
+					}
+				}
+				processing_changed |= ImGui::SliderFloat(
+					"Edge Threshold", &edge_threshold, 0.0f, 255.0f, "%.0f");
+			}
 
 		ImGui::Separator();
 		ImGui::Text("4. Ramp Characters");
@@ -382,18 +500,7 @@ int main()
 			processing_changed = true;
 		}
 
-		if (ImGui::Button("Reverse Ramp", ImVec2(-1.0f, 0.0f)))
-		{
-			const std::string reversed = reverse_utf8(ramp_buffer.data());
-			std::memcpy(ramp_buffer.data(), reversed.c_str(), reversed.size() + 1);
-			ramp_editor.cursor_byte = reversed.size();
-			processing_changed = true;
-		}
-
-		if (ImGui::TreeNodeEx(
-			"Special Symbol Keyboard",
-			ImGuiTreeNodeFlags_DefaultOpen |
-				ImGuiTreeNodeFlags_Framed |
+		if (ImGui::TreeNodeEx("Special Symbol Keyboard", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed |
 				ImGuiTreeNodeFlags_SpanAvailWidth))
 		{
 			for (int group_index = 0;
@@ -435,7 +542,6 @@ int main()
 					if (symbol_cursor < symbol_end && symbol_index % 6 != 0)
 						ImGui::SameLine();
 				}
-
 				ImGui::PopID();
 			}
 			ImGui::TreePop();
@@ -445,9 +551,10 @@ int main()
 		{
 			if (current_img.pixels)
 			{
-				ascii_art = generate_ascii(
-					current_img, target_columns, target_rows, brightness, contrast,
-					grayscale, invert_image, ramp_buffer.data());
+					ascii_art = generate_ascii(
+						current_img, target_columns, target_rows, brightness, contrast, grayscale,
+						invert_image, ramp_buffer.data(), edge_detection, edge_detector,
+						edge_style, edge_threshold, edge_characters);
 			}
 		}
 
@@ -464,15 +571,14 @@ int main()
 					selected_ascii_font = i;
 					pending_font_rebuild = true;
 				}
-
 				if (selected)
 					ImGui::SetItemDefaultFocus();
 			}
 
 			ImGui::EndCombo();
 		}
-		ImGui::DragFloat(
-			"Font Size", &ascii_font_size,0.1f, Config::minimum_ascii_font_size,Config::maximum_ascii_font_size, "%.1f");
+
+		ImGui::DragFloat("Font Size", &ascii_font_size,0.1f, Config::minimum_ascii_font_size,Config::maximum_ascii_font_size, "%.1f");
 		if (ImGui::IsItemDeactivatedAfterEdit())
 			pending_font_rebuild = true;
 		const bool spacing_x_changed = ImGui::DragFloat(
@@ -497,16 +603,13 @@ int main()
 		ImGui::Text("7. Color & Layer Opacity");
 		ImGui::ColorEdit4("Canvas Background", (float *)&bg_color);
 		ImGui::ColorEdit4("Text Color", (float *)&text_color);
-		ImGui::Checkbox("Show Base Image", &show_base_layer);
 		ImGui::SliderFloat("Base Layer Opacity", &base_opacity, 0.0f, 1.0f);
+		ImGui::Checkbox("Show Base Image", &show_base_layer);
 		ImGui::Checkbox("Show ASCII Overlay", &show_ascii_layer);
 
 		ImGui::Separator();
 		ImGui::Text("8. Exports");
 		ImGui::Checkbox("Export Entire ASCII Canvas", &export_full_canvas);
-		ImGui::Checkbox("Export Base Image", &export_base_image);
-		if (export_base_image)
-			ImGui::TextDisabled("Uses Base Layer Opacity: %.0f%%", base_opacity * 100.0f);
 		if (ImGui::Button("Export Image (.PNG / .JPG)", ImVec2(-1, 30)))
 		{
 			std::string save_path = SaveNativeFileDialog("ascii_art.png");
@@ -516,16 +619,60 @@ int main()
 				pending_image_export = true;
 			}
 		}
-		if (ImGui::Button("Export Text (.TXT)", ImVec2(-1, 30)))
+			if (ImGui::Button("Export Text (.TXT)", ImVec2(-1, 30)))
 		{
 			std::string save_path = SaveNativeFileDialog("ascii_art.txt");
 			if (!save_path.empty())
 			{
 				text_export_path = save_path;
 				pending_text_export = true;
+				}
 			}
-		}
-		}
+
+			ImGui::Separator();
+			ImGui::Text("9. Animated GIF (%d / 16 frames)", gif_frame_count);
+			const char *gif_areas[] = {"Current Viewport", "Full ASCII Canvas"};
+			ImGui::Combo("GIF Frame Area", &gif_export_area, gif_areas, IM_ARRAYSIZE(gif_areas));
+			ImGui::SliderInt("GIF Delay (1/100 sec)", &gif_delay, 1, 100);
+
+			ImGui::BeginDisabled(
+				gif_frame_count >= 16 || ascii_art.text.empty() || pending_gif_frame);
+			if (ImGui::Button("Add GIF Frame", ImVec2(-1, 30)))
+			{
+				if (gif_temp_directory.empty())
+					gif_temp_directory = create_gif_temp_directory();
+				if (gif_temp_directory.empty())
+					gif_status = "Failed to create temporary frame directory.";
+				else
+					pending_gif_frame = true;
+			}
+			ImGui::EndDisabled();
+
+			ImGui::BeginDisabled(gif_frame_count == 0 || pending_gif_generation);
+			if (ImGui::Button("Generate GIF", ImVec2(-1, 30)))
+			{
+				std::string save_path = SaveNativeFileDialog("ascii_animation.gif");
+				if (!save_path.empty())
+				{
+					if (!save_path.ends_with(".gif"))
+						save_path += ".gif";
+					gif_output_path = save_path;
+					pending_gif_generation = true;
+				}
+			}
+			ImGui::EndDisabled();
+
+			if (gif_frame_count > 0 && ImGui::Button("Clear GIF Frames", ImVec2(-1, 0)))
+			{
+				std::error_code error;
+				fs::remove_all(gif_temp_directory, error);
+				gif_temp_directory.clear();
+				gif_frame_count = 0;
+				gif_status = error ? "Failed to remove some temporary frames." : "GIF frames cleared.";
+			}
+			if (!gif_status.empty())
+				ImGui::TextWrapped("%s", gif_status.c_str());
+			}
 		ImGui::End();
 
 		// Viewport tools
@@ -611,9 +758,7 @@ int main()
 		const AsciiOutput displayed_ascii = text_editor.enabled ? layout_edited_ascii(text_editor.buffer.data(), text_editor.soft_wrap, editor_wrap_columns) : ascii_art;
 
 		// Canvas viewport
-		const float canvas_y = canvas_was_collapsed
-			? std::max(tools_height, io.DisplaySize.y - collapsed_bar_height)
-			: tools_height + editor_layout_height;
+		const float canvas_y = canvas_was_collapsed ? std::max(tools_height, io.DisplaySize.y - collapsed_bar_height) : tools_height + editor_layout_height;
 		ImGui::SetNextWindowPos(ImVec2(viewport_x, canvas_y), ImGuiCond_Always);
 		ImGui::SetNextWindowSize(
 			ImVec2(viewport_width, std::max(1.0f, io.DisplaySize.y - canvas_y)),
@@ -628,6 +773,7 @@ int main()
 				viewport_zoom = std::clamp(viewport_zoom * (io.MouseWheel > 0.0f ? 1.1f : 1.0f / 1.1f), 0.1f, 8.0f);
 
 		current_viewport_size = ImGui::GetContentRegionAvail();
+		current_viewport_scroll = ImVec2(ImGui::GetScrollX(), ImGui::GetScrollY());
 		ImDrawList *draw_list = ImGui::GetWindowDrawList();
 		ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
 
@@ -713,23 +859,69 @@ int main()
 				char_spacing_y,
 				bg_color,
 				text_color,
-				export_base_image ? &current_img : nullptr,
-				base_opacity,
 				glitch_intensity,
-				export_full_canvas,
-				current_viewport_size))
+					export_full_canvas,
+					current_viewport_size,
+					viewport_zoom,
+					current_viewport_scroll))
 			{
 				std::cerr << "Failed to export image: " << image_export_path << '\n';
 			}
 			pending_image_export = false;
 		}
-		if (pending_text_export)
+			if (pending_text_export)
 		{
 			if (!export_to_text(text_export_path, displayed_ascii))
 				std::cerr << "Failed to export text: " << text_export_path << '\n';
-			pending_text_export = false;
-		}
-		if (pending_font_rebuild)
+				pending_text_export = false;
+			}
+			if (pending_gif_frame)
+			{
+				std::array<char, 32> frame_name{};
+				std::snprintf(
+					frame_name.data(), frame_name.size(),
+					"frame_%02d.png", gif_frame_count + 1);
+				const fs::path frame_path = gif_temp_directory / frame_name.data();
+				const bool frame_exported = export_to_image(
+					frame_path.string(), displayed_ascii, fonts.ascii_font, ascii_font_size,
+					char_spacing_x, char_spacing_y, bg_color, text_color, glitch_intensity,
+					gif_export_area == 1, current_viewport_size, viewport_zoom,
+					current_viewport_scroll);
+				if (frame_exported)
+				{
+					++gif_frame_count;
+					gif_status = "Frame " + std::to_string(gif_frame_count) + " added.";
+				}
+				else
+				{
+					gif_status = "Failed to render GIF frame.";
+				}
+				pending_gif_frame = false;
+			}
+			if (pending_gif_generation)
+			{
+				const std::string command =
+					"/bin/bash " + shell_quote(gif_script_path) + " " +
+					shell_quote(gif_output_path) + " " + std::to_string(gif_delay) + " " +
+					shell_quote(gif_temp_directory);
+				const int result = std::system(command.c_str());
+				if (result == 0)
+				{
+					std::error_code error;
+					fs::remove_all(gif_temp_directory, error);
+					gif_temp_directory.clear();
+					gif_frame_count = 0;
+					gif_status = error
+						? "GIF created, but temporary frames could not be fully removed."
+						: "GIF created: " + gif_output_path;
+				}
+				else
+				{
+					gif_status = "GIF generation failed; temporary frames were preserved.";
+				}
+				pending_gif_generation = false;
+			}
+			if (pending_font_rebuild)
 		{
 			fonts = rebuild_font_atlas(builtin_ascii_fonts[selected_ascii_font], ascii_font_size);
 			pending_font_rebuild = false;
@@ -737,6 +929,11 @@ int main()
 
 	}
 
+	if (!gif_temp_directory.empty())
+	{
+		std::error_code error;
+		fs::remove_all(gif_temp_directory, error);
+	}
 	destroy_image_buffer(current_img);
 
 	ImGui_ImplOpenGL3_Shutdown();

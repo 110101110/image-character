@@ -48,9 +48,13 @@ OBJS := $(CPP_OBJS) $(OBJC_OBJS) $(C_OBJS)
 
 TARGET := image_character
 
-.PHONY: all clean fclean re
+.PHONY: all install-deps clean fclean re
 
 all: $(TARGET)
+
+install-deps:
+	@chmod +x install_dependencies.sh
+	@./install_dependencies.sh
 
 $(TARGET): $(OBJS)
 	@echo "Linking $(TARGET)..."

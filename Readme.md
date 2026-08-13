@@ -3,22 +3,22 @@
 A custom ascii art generator that fits my need!
 
 *to do list:*
--	text mode toggle for text box
 -	glith effet: remplace certains characters by random character from an input
--	unicode UTF8, add more range
--	export img as text file
--   unwanted glitch on sliding bars
--   character spacing fucks up aspect ratio
 
-ramp set:(
-    " .:-=+*#%@"          # ASCII base
-    "✧✦✩✪✫✬✭✮✯✰"        # Stars (light / airy)
-    "✿❀❁❂❃❉❊❋"          # Flowers (slightly denser)
-    "アカサタナハマヤラワ"  # Katakana (light-medium density)
-    "𝄀𝄁𝄂𝄃𝄆𝄇𝄈𝄉𝄊𝄋"    # Bar lines & repeats (thin musical symbols)
-    "𝄞𝄢𝄡𝄫𝄪𝄭𝄮𝄯𝄰𝄱"    # Clefs & accidentals (medium density)
-    "𝄻𝄼𝄽𝄾𝅀𝅁𝅂𝅃𝅄𝅅"    # Rests (mid-dark)
-    "𝅘𝅙𝅚𝅛𝅜𝅝𝅗𝅥𝅘𝅥𝅘𝅥𝅮𝅘𝅥𝅯"    # Notes (dense)
-    "⠁⠂⠄⡀⢀⠐⠠⡁⡂⡄⡈⡐⡠"  # Braille (fine-grain shading)
-    "█▓▒░"                # Full/half blocks (darkest)
-)
+*to use*
+- first download the repo and launch your terminal inside the folder
+
+- second, compile with the provided Makefile
+	```bash
+	make
+	```
+
+	*if not sure having all the dependecies, use this line instead:*
+	```bash
+	make install-deps
+	```
+
+- lastly, launch the executable
+	```bash
+	./image_character
+	```
