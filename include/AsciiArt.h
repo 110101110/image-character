@@ -13,7 +13,7 @@ namespace AsciiArt
 		inline constexpr int window_width = 1600;
 		inline constexpr int window_height = 900;
 		inline constexpr float sidebar_width = 460.0f;
-		inline constexpr const char *window_title = "ASCII Art";
+		inline constexpr const char *window_title = "Image & Character";
 		inline constexpr const char *glsl_version = "#version 410";
 
 		inline constexpr int default_columns = 100;
@@ -88,8 +88,7 @@ namespace AsciiArt
 		{"Courier New", "/System/Library/Fonts/Supplemental/Courier New.ttf"},
 		{"Andale Mono", "/System/Library/Fonts/Supplemental/Andale Mono.ttf"}};
 
-	inline constexpr std::size_t builtin_ascii_font_count =
-		sizeof(builtin_ascii_fonts) / sizeof(builtin_ascii_fonts[0]);
+	inline constexpr std::size_t builtin_ascii_font_count = sizeof(builtin_ascii_fonts) / sizeof(builtin_ascii_fonts[0]);
 
 	inline constexpr const char *interface_font_path =
 		"/System/Library/Fonts/Supplemental/Courier New.ttf";

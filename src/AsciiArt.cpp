@@ -41,8 +41,7 @@ namespace AsciiArt
 		output.cols = target_columns;
 		output.rows = target_rows;
 		output.text.reserve((target_columns + 1) * target_rows);
-		std::vector<float> luminance_grid(
-			static_cast<std::size_t>(target_columns) * target_rows, 0.0f);
+		std::vector<float> luminance_grid(static_cast<std::size_t>(target_columns) * target_rows, 0.0f);
 
 		const float cell_width = static_cast<float>(image.width) / target_columns;
 		const float cell_height = static_cast<float>(image.height) / target_rows;
@@ -170,14 +169,11 @@ namespace AsciiArt
 
 				if (is_edge)
 				{
-					output.text += edge_style == EdgeStyle::Simple
-						? simple_character
-						: directional_character(gradient_x, gradient_y);
+					output.text += edge_style == EdgeStyle::Simple ? simple_character : directional_character(gradient_x, gradient_y);
 				}
 				else
 				{
-					const std::size_t ramp_index = static_cast<std::size_t>(
-						(center / 255.0f) * static_cast<float>(ramp_characters.size() - 1));
+					const std::size_t ramp_index = static_cast<std::size_t>((center / 255.0f) * static_cast<float>(ramp_characters.size() - 1));
 					output.text.append(ramp_characters[ramp_index]);
 				}
 			}
