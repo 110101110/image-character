@@ -2,9 +2,11 @@
 
 #include <cstddef>
 #include <string>
+#include <string_view>
 
 #include <glad/glad.h>
 #include "imgui.h"
+#include "ImageProcess.h"
 
 namespace AsciiArt
 {
@@ -43,25 +45,31 @@ namespace AsciiArt
 		int rows = 0;
 	};
 
-	enum class EdgeDetector
+	struct AsciiGenerationOptions
 	{
-		Outline,
-		Sobel
+		int columns = Config::default_columns;
+		int rows = Config::default_rows;
+		std::string_view ramp = Config::default_ramp;
+		ImageProcess::Settings processing;
 	};
 
-	enum class EdgeStyle
+	struct ViewportTransform
 	{
-		Simple,
-		Directional
+		ImVec2 size{0.0f, 0.0f};
+		ImVec2 scroll{0.0f, 0.0f};
+		float zoom = 1.0f;
 	};
 
-	struct EdgeCharacters
+	struct ImageExportOptions
 	{
-		std::string simple = "#";
-		std::string horizontal = "─";
-		std::string vertical = "│";
-		std::string rising_diagonal = "╱";
-		std::string falling_diagonal = "╲";
+		ImFont *font = nullptr;
+		float font_size = Config::default_ascii_font_size;
+		ImVec2 character_spacing{Config::default_spacing_x, Config::default_spacing_y};
+		ImVec4 background_color{1.0f, 1.0f, 1.0f, 1.0f};
+		ImVec4 text_color{0.0f, 0.0f, 0.0f, 1.0f};
+		float glitch_intensity = 0.0f;
+		bool full_canvas = false;
+		float scale = Config::default_export_scale;
 	};
 
 	struct BuiltinFont
@@ -90,8 +98,7 @@ namespace AsciiArt
 
 	inline constexpr std::size_t builtin_ascii_font_count = sizeof(builtin_ascii_fonts) / sizeof(builtin_ascii_fonts[0]);
 
-	inline constexpr const char *interface_font_path =
-		"/System/Library/Fonts/Supplemental/Courier New.ttf";
+	inline constexpr const char *interface_font_path = "/System/Library/Fonts/Supplemental/Courier New.ttf";
 	inline constexpr float interface_font_size = 14.0f;
 	inline constexpr const char *cjk_fallback_font_path = "/System/Library/Fonts/PingFang.ttc";
 	inline constexpr const char *symbol_fallback_font_path = "/System/Library/Fonts/Apple Symbols.ttf";
@@ -127,20 +134,7 @@ namespace AsciiArt
 
 	inline constexpr std::size_t special_symbol_group_count = sizeof(special_symbol_groups) / sizeof(special_symbol_groups[0]);
 
-	AsciiOutput generate_ascii(
-		const ImageBuffer &image,
-		int target_columns,
-		int target_rows,
-		float brightness,
-		float contrast,
-		float grayscale,
-		bool invert,
-		const std::string &ramp,
-		bool edge_detection = false,
-		EdgeDetector edge_detector = EdgeDetector::Outline,
-		EdgeStyle edge_style = EdgeStyle::Simple,
-		float edge_threshold = 128.0f,
-		const EdgeCharacters &edge_characters = EdgeCharacters{});
+	AsciiOutput generate_ascii(const ImageBuffer &image, const AsciiGenerationOptions &options);
 
 	int calculate_locked_rows(const ImageBuffer &image, int columns, float spacing_x, float spacing_y);
 
@@ -156,21 +150,7 @@ namespace AsciiArt
 
 	FontSet rebuild_font_atlas(const BuiltinFont &ascii_font_definition, float ascii_font_size);
 
-	bool export_to_image(
-		const std::string &filepath,
-		const AsciiOutput &ascii,
-		ImFont *ascii_font,
-		float ascii_font_size,
-		float spacing_x,
-		float spacing_y,
-		ImVec4 background_color,
-		ImVec4 text_color,
-		float glitch_intensity,
-		bool export_full_canvas,
-		ImVec2 viewport_size,
-		float viewport_zoom,
-		ImVec2 viewport_scroll,
-		float export_scale = Config::default_export_scale);
+	bool export_to_image(const std::string &filepath, const AsciiOutput &ascii, const ImageExportOptions &options, const ViewportTransform &viewport);
 
 	bool export_to_text(const std::string &filepath, const AsciiOutput &ascii);
 }

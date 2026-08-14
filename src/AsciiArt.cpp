@@ -1,4 +1,5 @@
 #include "AsciiArt.h"
+#include "ImageProcess.h"
 
 #include <algorithm>
 #include <cmath>
@@ -10,17 +11,16 @@
 
 namespace AsciiArt
 {
-	AsciiOutput generate_ascii(const ImageBuffer &image, int target_columns, int target_rows,
-		float brightness, float contrast, float grayscale,
-		bool invert, const std::string &ramp, bool edge_detection,
-		EdgeDetector edge_detector, EdgeStyle edge_style, float edge_threshold,
-		const EdgeCharacters &edge_characters)
+	AsciiOutput generate_ascii(const ImageBuffer &image, const AsciiGenerationOptions &options)
 	{
+		using namespace ImageProcess;
+		const int target_columns = options.columns;
+		const int target_rows = options.rows;
+		const std::string_view ramp = options.ramp;
+		const Settings &processing = options.processing;
 		AsciiOutput output;
 		if (!image.pixels || image.width <= 0 || image.height <= 0 || target_columns <= 0 || target_rows <= 0 || ramp.empty())
-		{
 			return output;
-		}
 
 		std::vector<std::string_view> ramp_characters;
 		const char *ramp_cursor = ramp.data();
@@ -45,7 +45,6 @@ namespace AsciiArt
 
 		const float cell_width = static_cast<float>(image.width) / target_columns;
 		const float cell_height = static_cast<float>(image.height) / target_rows;
-		const float grayscale_mix = std::clamp(grayscale, 0.0f, 1.0f);
 
 		for (int row = 0; row < target_rows; ++row)
 		{
@@ -68,24 +67,13 @@ namespace AsciiArt
 						const float green = image.pixels[index + 1];
 						const float blue = image.pixels[index + 2];
 
-					const float average_grayscale = (red + green + blue) / 3.0f;
-					const float perceptual_luminance = 0.2126f * red + 0.7152f * green + 0.0722f * blue;
-					float luminance = std::lerp(average_grayscale, perceptual_luminance, grayscale_mix);
-						if (invert)
-							luminance = 255.0f - luminance;
-						total_luminance += luminance;
+						total_luminance += process_pixel(red, green, blue, processing);
 						++pixel_count;
 					}
 				}
 
-				float average_luminance = pixel_count > 0
-					? total_luminance / pixel_count
-					: 0.0f;
-				average_luminance = (average_luminance - 128.0f) * contrast + 128.0f + brightness;
-				average_luminance = std::clamp(average_luminance, 0.0f, 255.0f);
-
-				luminance_grid[static_cast<std::size_t>(row) * target_columns + column] =
-					average_luminance;
+				float average_luminance = pixel_count > 0 ? total_luminance / pixel_count : 0.0f;
+				luminance_grid[static_cast<std::size_t>(row) * target_columns + column] = average_luminance;
 			}
 		}
 
@@ -101,12 +89,10 @@ namespace AsciiArt
 			if (character.empty())
 				return fallback;
 			unsigned int codepoint = 0;
-			const int byte_count = ImTextCharFromUtf8(
-				&codepoint, character.data(), character.data() + character.size());
-			return byte_count > 0
-				? std::string_view(character.data(), static_cast<std::size_t>(byte_count))
-				: std::string_view(fallback);
+			const int byte_count = ImTextCharFromUtf8(&codepoint, character.data(), character.data() + character.size());
+			return byte_count > 0 ? std::string_view(character.data(), static_cast<std::size_t>(byte_count)) : std::string_view(fallback);
 		};
+		const EdgeCharacters &edge_characters = processing.edge_characters;
 		const std::string_view simple_character = valid_character(edge_characters.simple, "#");
 		const std::string_view horizontal_character = valid_character(edge_characters.horizontal, "─");
 		const std::string_view vertical_character = valid_character(edge_characters.vertical, "│");
@@ -124,7 +110,6 @@ namespace AsciiArt
 			return gradient_x * gradient_y >= 0.0f ? rising_character : falling_character;
 		};
 
-		const float threshold = std::clamp(edge_threshold, 0.0f, 255.0f);
 		for (int row = 0; row < target_rows; ++row)
 		{
 			for (int column = 0; column < target_columns; ++column)
@@ -134,42 +119,35 @@ namespace AsciiArt
 				float gradient_x = 0.0f;
 				float gradient_y = 0.0f;
 
-				if (edge_detection && edge_detector == EdgeDetector::Outline)
+				if (processing.edge_detection && processing.edge_detector == EdgeDetector::Outline)
 				{
-					const bool foreground = center >= threshold;
-					for (int offset_y = -1; offset_y <= 1 && !is_edge; ++offset_y)
+					float neighbors[8];
+					int neighbor_index = 0;
+					for (int offset_y = -1; offset_y <= 1; ++offset_y)
 					{
 						for (int offset_x = -1; offset_x <= 1; ++offset_x)
 						{
-							if ((offset_x != 0 || offset_y != 0) &&
-								(sample(column + offset_x, row + offset_y) >= threshold) != foreground)
-							{
-								is_edge = true;
-								break;
-							}
+							if (offset_x != 0 || offset_y != 0)
+								neighbors[neighbor_index++] = sample(column + offset_x, row + offset_y);
 						}
 					}
+					is_edge = outline_edge(center, neighbors, processing.edge_threshold);
 					gradient_x = sample(column + 1, row) - sample(column - 1, row);
 					gradient_y = sample(column, row + 1) - sample(column, row - 1);
 				}
-				else if (edge_detection)
+				else if (processing.edge_detection)
 				{
-					gradient_x =
-						-sample(column - 1, row - 1) + sample(column + 1, row - 1) -
-						2.0f * sample(column - 1, row) + 2.0f * sample(column + 1, row) -
-						sample(column - 1, row + 1) + sample(column + 1, row + 1);
-					gradient_y =
-						-sample(column - 1, row - 1) - 2.0f * sample(column, row - 1) -
-						sample(column + 1, row - 1) + sample(column - 1, row + 1) +
-						2.0f * sample(column, row + 1) + sample(column + 1, row + 1);
-					const float magnitude = std::sqrt(
-						gradient_x * gradient_x + gradient_y * gradient_y) / 4.0f;
-					is_edge = magnitude >= threshold;
+					float samples[9];
+					int sample_index = 0;
+					for (int offset_y = -1; offset_y <= 1; ++offset_y)
+						for (int offset_x = -1; offset_x <= 1; ++offset_x)
+							samples[sample_index++] = sample(column + offset_x, row + offset_y);
+					is_edge = sobel_edge(samples, processing.edge_threshold, gradient_x, gradient_y);
 				}
 
 				if (is_edge)
 				{
-					output.text += edge_style == EdgeStyle::Simple ? simple_character : directional_character(gradient_x, gradient_y);
+					output.text += processing.edge_style == EdgeStyle::Simple ? simple_character : directional_character(gradient_x, gradient_y);
 				}
 				else
 				{
@@ -212,8 +190,7 @@ namespace AsciiArt
 		if (image.width <= 0 || image.height <= 0 || columns <= 0 || rows <= 0 || spacing_x <= 0.0f)
 			return spacing_x;
 
-		return columns * spacing_x * image.height /
-			(rows * static_cast<float>(image.width));
+		return columns * spacing_x * image.height / (rows * static_cast<float>(image.width));
 	}
 
 	float calculate_locked_spacing_x(const ImageBuffer &image, int columns, int rows, float spacing_y)
@@ -221,8 +198,7 @@ namespace AsciiArt
 		if (image.width <= 0 || image.height <= 0 || columns <= 0 || rows <= 0 || spacing_y <= 0.0f)
 			return spacing_y;
 
-		return rows * spacing_y * image.width /
-			(columns * static_cast<float>(image.height));
+		return rows * spacing_y * image.width / (columns * static_cast<float>(image.height));
 	}
 
 	GLuint create_texture_from_pixels(const unsigned char *pixels, int width, int height, int channels)

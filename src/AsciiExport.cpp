@@ -11,11 +11,21 @@
 
 namespace AsciiArt
 {
-	bool export_to_image(const std::string &filepath, const AsciiOutput &ascii, ImFont *ascii_font,
-		float ascii_font_size, float spacing_x, float spacing_y, ImVec4 background_color, ImVec4 text_color, float glitch_intensity,
-		bool export_full_canvas, ImVec2 viewport_size, float viewport_zoom,
-		ImVec2 viewport_scroll, float export_scale)
+	bool export_to_image(const std::string &filepath, const AsciiOutput &ascii,
+		const ImageExportOptions &options, const ViewportTransform &viewport)
 	{
+		ImFont *ascii_font = options.font;
+		const float ascii_font_size = options.font_size;
+		const float spacing_x = options.character_spacing.x;
+		const float spacing_y = options.character_spacing.y;
+		const ImVec4 background_color = options.background_color;
+		const ImVec4 text_color = options.text_color;
+		const float glitch_intensity = options.glitch_intensity;
+		const bool export_full_canvas = options.full_canvas;
+		const float export_scale = options.scale;
+		const ImVec2 viewport_size = viewport.size;
+		const float viewport_zoom = viewport.zoom;
+		const ImVec2 viewport_scroll = viewport.scroll;
 		if (filepath.empty() || ascii.text.empty() || ascii.cols <= 0 || ascii.rows <= 0 ||
 			!ascii_font || ascii_font_size <= 0.0f || export_scale <= 0.0f)
 		{

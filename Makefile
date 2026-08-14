@@ -35,6 +35,10 @@ GLAD_SRCS := $(GLAD_DIR)/src/glad.c
 
 APP_CPP_SRCS := src/main.cpp \
 				src/AsciiArt.cpp \
+				src/ImageProcess.cpp \
+				src/TextLayout.cpp \
+				src/TextEditor.cpp \
+				src/RampEditor.cpp \
 				src/AsciiExport.cpp \
 				src/FontAtlas.cpp \
 				src/StbImplementation.cpp

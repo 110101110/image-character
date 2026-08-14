@@ -25,3 +25,4 @@ ascii_studio
 imgui.ini
 asset/
 .clangd
+.clang-format

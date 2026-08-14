@@ -3,7 +3,8 @@
 #include <algorithm>
 #include <iostream>
 
-AsciiArt::FontSet AsciiArt::rebuild_font_atlas(const BuiltinFont &ascii_font_definition, float ascii_font_size)
+AsciiArt::FontSet AsciiArt::rebuild_font_atlas(const BuiltinFont &ascii_font_definition,
+	float ascii_font_size)
 {
 	ImGuiIO &io = ImGui::GetIO();
 	ascii_font_size = std::clamp(ascii_font_size, Config::minimum_ascii_font_size, Config::maximum_ascii_font_size);
