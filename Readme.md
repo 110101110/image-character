@@ -4,8 +4,7 @@ A custom ascii art generator that fits my need!
 
 *to do list:*
 -	possible glith effet: change text color of a random character
--	refactor utf8 related fucntions (e.g. get cursor), one cpp file for text edit related function, one cpp file for gif generation
-- create fucntions for each image processus
+-	finish readme
 
 *to use*
 - first download the repo and launch your terminal inside the folder
